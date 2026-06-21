@@ -28,6 +28,17 @@ import (
 // version is overridable at link time with -ldflags "-X main.version=...".
 var version = "0.1.0-dev"
 
+// defaultCategoryNames is the shipped category set, inserted on first boot
+// (and re-asserted on every subsequent boot, no-op if already present).
+var defaultCategoryNames = []string{
+	"Politics",
+	"Technology",
+	"Business",
+	"Sports",
+	"World",
+	"Other",
+}
+
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "assistant: %v\n", err)
@@ -64,6 +75,12 @@ func run() error {
 	}
 	defer st.Close() //nolint:errcheck,govet // shutdown path
 
+	// Ensure the default category set is present. Idempotent; a no-op on
+	// every boot after the first.
+	if err := (sqlite.CategoryStore{S: st}).EnsureDefaults(ctx, defaultCategoryNames); err != nil {
+		return fmt.Errorf("ensure default categories: %w", err)
+	}
+
 	// AI summarizer. Used by the digest cycle.
 	summarizer := newSummarizer(cfg, log)
 
@@ -87,19 +104,19 @@ func run() error {
 	// Admin HTTP server. Use thin adapter wrappers so a single *Store can
 	// satisfy several repository interfaces that share method names.
 	srv := adminapi.New(adminapi.Deps{
-		Log:             log,
-		Version:         version,
-		Channels:        sqlite.ChannelStore{S: st},
-		Categories:      sqlite.CategoryStore{S: st},
-		Settings:        sqlite.SettingsStore{S: st},
-		Cycles:          sqlite.CycleStore{S: st},
-		Digests:         sqlite.DigestStore{S: st},
-		Health:          sqlite.HealthStore{S: st},
-		Telegram:        tgClient,
-		SchedulerState:  schedulerStateFn,
+		Log:               log,
+		Version:           version,
+		Channels:          sqlite.ChannelStore{S: st},
+		Categories:        sqlite.CategoryStore{S: st},
+		Settings:          sqlite.SettingsStore{S: st},
+		Cycles:            sqlite.CycleStore{S: st},
+		Digests:           sqlite.DigestStore{S: st},
+		Health:            sqlite.HealthStore{S: st},
+		Telegram:          tgClient,
+		SchedulerState:    schedulerStateFn,
 		TelegramReachable: func() bool { return true },
-		AIReachable:     func() bool { return cfg.AIProvider == "fake" },
-		StartedAt:       time.Now(),
+		AIReachable:       func() bool { return cfg.AIProvider == "fake" },
+		StartedAt:         time.Now(),
 	})
 
 	// Digest cycle + scheduler. The cycle wires all repositories together;

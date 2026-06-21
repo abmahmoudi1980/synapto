@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -304,3 +305,155 @@ func TestCycle_RestartSafety_NoDoubleDelivery(t *testing.T) {
 
 // int64Ptr is a helper for settings updates.
 func int64Ptr(v int64) *int64 { return &v }
+
+// intPtr is a helper for settings updates.
+func intPtr(v int) *int { return &v }
+
+// TestCycle_RenamedCategoryAppearsInDigest covers SC-006: after renaming a
+// default category, the next cycle groups items under the new heading.
+// We seed the fake AI to return "Politics" for the test message, then
+// rename "Politics" to "Policy" and re-run; the rendered text must show
+// the new heading (or — if the rename isn't honored — fall back to
+// uncategorized_label; we assert on the policy path).
+func TestCycle_RenamedCategoryAppearsInDigest(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+
+	seed := `[{"channel":"policy_news","messages":[
+		{"id":3001,"text":"Government announces new regulation","media":"text"}
+	]}]`
+	tg, sentPath := newTestTelegram(t, seed)
+
+	if _, err := st.AddChannel(ctx, "policy_news", "Policy News"); err != nil {
+		t.Fatalf("add channel: %v", err)
+	}
+	if _, err := st.UpdateSettings(ctx, store.SettingsUpdate{
+		TelegramSubscriberChat: int64Ptr(123456789),
+	}); err != nil {
+		t.Fatalf("update settings: %v", err)
+	}
+
+	// Fake AI: route the test message to "Politics" deterministically.
+	fakeAIPolitics := ai.NewFake([]ai.FakeRule{
+		{
+			Match: func(in ai.Input) bool {
+				return in.ChannelHandle == "policy_news"
+			},
+			Output: ai.Output{
+				Summary:    "Government announces new regulation",
+				Category:   "Politics",
+				Confidence: 0.9,
+			},
+		},
+	}, "Uncategorized")
+
+	cycle := digest.NewCycle(digest.CycleDeps{
+		Log:              logging.New("debug"),
+		Telegram:         tg,
+		Summarizer:       fakeAIPolitics,
+		Channels:         sqlite.ChannelStore{S: st},
+		Categories:       sqlite.CategoryStore{S: st},
+		Settings:         sqlite.SettingsStore{S: st},
+		Cycles:           sqlite.CycleStore{S: st},
+		Digests:          sqlite.DigestStore{S: st},
+		Health:           sqlite.HealthStore{S: st},
+		SubscriberChatID: 123456789,
+	})
+
+	// Step 1: run a cycle, confirm "Politics" heading.
+	ws1 := time.Now().UTC().Add(-20 * time.Minute)
+	we1 := time.Now().UTC().Add(-10 * time.Minute)
+	cycleID1, err := cycle.Run(ctx, ws1, we1)
+	if err != nil {
+		t.Fatalf("first cycle.Run: %v", err)
+	}
+	d1, err := st.GetDigestByCycle(ctx, cycleID1)
+	if err != nil {
+		t.Fatalf("get digest 1: %v", err)
+	}
+	if !strings.Contains(d1.RenderedText, "# Politics") {
+		t.Errorf("expected '# Politics' in first digest, got:\n%s", d1.RenderedText)
+	}
+
+	// Step 2: rename "Politics" to "Policy" via the CategoryRepo.
+	cats, err := st.ListCategories(ctx)
+	if err != nil {
+		t.Fatalf("list categories: %v", err)
+	}
+	var politicsID string
+	for _, c := range cats {
+		if c.Name == "Politics" {
+			politicsID = c.ID
+		}
+	}
+	if politicsID == "" {
+		t.Fatal("Politics default category not found")
+	}
+	if _, err := st.RenameCategory(ctx, politicsID, "Policy"); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+
+	// Step 3: re-seed a fresh message and run a second cycle. The fake AI
+	// for the second cycle returns "Policy" (the renamed category).
+	seed2 := `[{"channel":"policy_news","messages":[
+		{"id":3002,"text":"Cabinet reshuffle announced","media":"text"}
+	]}]`
+	tg2, sentPath2 := newTestTelegram(t, seed2)
+	fakeAIPolicy := ai.NewFake([]ai.FakeRule{
+		{
+			Match: func(in ai.Input) bool {
+				return in.ChannelHandle == "policy_news"
+			},
+			Output: ai.Output{
+				Summary:    "Cabinet reshuffle announced",
+				Category:   "Policy",
+				Confidence: 0.9,
+			},
+		},
+	}, "Uncategorized")
+	cycle2 := digest.NewCycle(digest.CycleDeps{
+		Log:              logging.New("debug"),
+		Telegram:         tg2,
+		Summarizer:       fakeAIPolicy,
+		Channels:         sqlite.ChannelStore{S: st},
+		Categories:       sqlite.CategoryStore{S: st},
+		Settings:         sqlite.SettingsStore{S: st},
+		Cycles:           sqlite.CycleStore{S: st},
+		Digests:          sqlite.DigestStore{S: st},
+		Health:           sqlite.HealthStore{S: st},
+		SubscriberChatID: 123456789,
+	})
+
+	// Reset the cursor so the new message is treated as new.
+	if _, err := st.UpdateSettings(ctx, store.SettingsUpdate{
+		DigestIntervalSeconds: intPtr(600),
+	}); err != nil {
+		t.Fatalf("update settings: %v", err)
+	}
+	// The new message is id=3002; the previous cycle advanced the cursor
+	// to 3001. To force the second cycle to pick up 3002, we need a fresh
+	// telegram client; the seed only has one channel and one message. The
+	// fake fetcher will read whatever is in the new seed, returning the
+	// new message with id=3002 — and the channel's last_seen_msg_id is
+	// 3001 from the first cycle, so 3002 > 3001, the cycle picks it up.
+	_ = sentPath
+	ws2 := time.Now().UTC().Add(-5 * time.Minute)
+	we2 := time.Now().UTC()
+	cycleID2, err := cycle2.Run(ctx, ws2, we2)
+	if err != nil {
+		t.Fatalf("second cycle.Run: %v", err)
+	}
+	d2, err := st.GetDigestByCycle(ctx, cycleID2)
+	if err != nil {
+		t.Fatalf("get digest 2: %v", err)
+	}
+	if !strings.Contains(d2.RenderedText, "# Policy") {
+		t.Errorf("expected '# Policy' in second digest after rename, got:\n%s", d2.RenderedText)
+	}
+	if strings.Contains(d2.RenderedText, "# Politics") {
+		t.Errorf("did not expect '# Politics' in second digest after rename, got:\n%s", d2.RenderedText)
+	}
+	if readSentFile(t, sentPath2) != 1 {
+		t.Errorf("expected 1 sent message in second cycle")
+	}
+}

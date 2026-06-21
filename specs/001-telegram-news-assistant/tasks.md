@@ -124,16 +124,16 @@ description: "Task list for the Telegram News Digest Assistant feature"
 
 ### Tests for User Story 3
 
-- [ ] T037 [P] [US3] Admin API contract test for categories (list, add, rename, delete custom, refuse delete default) in `backend/internal/adminapi/categories_test.go`
+- [X] T037 [P] [US3] Admin API contract test for categories (list, add, rename, delete custom, refuse delete default) in `backend/internal/adminapi/categories_test.go`
 
 ### Implementation for User Story 3
 
-- [ ] T038 [P] [US3] Admin API handlers in `backend/internal/adminapi/categories.go` for `GET /api/categories`, `POST /api/categories`, `PATCH /api/categories/{id}`, `DELETE /api/categories/{id}`
-- [ ] T039 [P] [US3] Implement `CategoryRepo.EnsureDefaults` call on startup in `backend/cmd/assistant/main.go` (idempotent insert of Politics, Technology, Business, Sports, World, Other)
-- [ ] T040 [P] [US3] Update `digest.Cycle` in `backend/internal/digest/cycle.go` to map `ai.ErrCategoryUnknown` to `settings.uncategorized_label` and log a `warn` event (FR-006 acceptance scenario 3)
-- [ ] T041 [P] [US3] Frontend `CategoryList` component in `frontend/src/lib/components/CategoryList.svelte` (add, inline rename, remove with confirmation)
-- [ ] T042 [P] [US3] Frontend Categories page in `frontend/src/routes/categories/+page.svelte` (depends on T041)
-- [ ] T043 [US3] Wire category handlers in `main.go` and confirm SC-006 in `quickstart.md` step A7 (depends on T038, T042)
+- [X] T038 [P] [US3] Admin API handlers in `backend/internal/adminapi/categories.go` for `GET /api/categories`, `POST /api/categories`, `PATCH /api/categories/{id}`, `DELETE /api/categories/{id}`
+- [X] T039 [P] [US3] Implement `CategoryRepo.EnsureDefaults` call on startup in `backend/cmd/assistant/main.go` (idempotent insert of Politics, Technology, Business, Sports, World, Other)
+- [X] T040 [P] [US3] Update `digest.Cycle` in `backend/internal/digest/cycle.go` to map `ai.ErrCategoryUnknown` to `settings.uncategorized_label` and log a `warn` event (FR-006 acceptance scenario 3)
+- [X] T041 [P] [US3] Frontend `CategoryList` component in `frontend/src/lib/components/CategoryList.svelte` (add, inline rename, remove with confirmation)
+- [X] T042 [P] [US3] Frontend Categories page in `frontend/src/routes/categories/+page.svelte` (depends on T041)
+- [X] T043 [US3] Wire category handlers in `main.go` and confirm SC-006 in `quickstart.md` step A7 (depends on T038, T042)
 
 **Checkpoint**: US1, US2, US3 are all functional — categories can be customized and the next digest reflects the change.
 

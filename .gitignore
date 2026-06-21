@@ -1,6 +1,7 @@
 # Build output
 bin/
 backend/bin/
+backend/assistant
 dist/
 
 # Frontend
@@ -8,6 +9,10 @@ frontend/node_modules/
 frontend/build/
 frontend/.svelte-kit/
 frontend/.vite/
+
+# Embedded SPA staging area (populated by make copy-spa, not source)
+backend/internal/adminapi/spa/_app/
+backend/internal/adminapi/spa/index.html
 
 # Backend runtime artifacts (referenced in specs/001-telegram-news-assistant/quickstart.md)
 .runtime/

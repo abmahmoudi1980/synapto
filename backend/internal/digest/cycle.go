@@ -2,6 +2,7 @@ package digest
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"time"
@@ -15,15 +16,15 @@ import (
 
 // CycleDeps bundles the dependencies a Cycle needs.
 type CycleDeps struct {
-	Log         *slog.Logger
-	Telegram    telegram.Client
-	Summarizer  ai.Summarizer
-	Channels    store.ChannelRepo
-	Categories  store.CategoryRepo
-	Settings    store.SettingsRepo
-	Cycles      store.CycleRepo
-	Digests     store.DigestRepo
-	Health      store.HealthRepo
+	Log              *slog.Logger
+	Telegram         telegram.Client
+	Summarizer       ai.Summarizer
+	Channels         store.ChannelRepo
+	Categories       store.CategoryRepo
+	Settings         store.SettingsRepo
+	Cycles           store.CycleRepo
+	Digests          store.DigestRepo
+	Health           store.HealthRepo
 	SubscriberChatID int64
 }
 
@@ -136,9 +137,14 @@ func (c *Cycle) Run(ctx context.Context, windowStart, windowEnd time.Time) (stri
 	summaries, degraded := c.summarizeBatch(ctx, items, categorySet, settings.UncategorizedLabel)
 	log.Info("cycle.summarized", "items", len(summaries), "degraded", degraded)
 
-	// 5. Render.
+	// 5. Render. Filter out items whose summary is empty (e.g. dropped
+	// after ErrInvalidInput from the AI).
 	renderItems := make([]RenderItem, 0, len(summaries))
+	kept := make([]int, 0, len(summaries)) // indices into items[] we kept
 	for i, s := range summaries {
+		if s.Summary == "" {
+			continue
+		}
 		catName := s.Category
 		catOrder := 0
 		if !categorySet[catName] {
@@ -157,6 +163,7 @@ func (c *Cycle) Run(ctx context.Context, windowStart, windowEnd time.Time) (stri
 			ChannelHandle: items[i].ChannelHandle,
 			MediaKind:     items[i].MediaKind,
 		})
+		kept = append(kept, i)
 	}
 	messages := Render(RenderInput{
 		WindowEnd:     windowEnd,
@@ -216,8 +223,10 @@ func (c *Cycle) Run(ctx context.Context, windowStart, windowEnd time.Time) (stri
 		log.Error("record digest failed", "err", err)
 	}
 
-	// Record digest items.
-	for i, s := range summaries {
+	// Record digest items. Only persist items that survived the summary
+	// step (i.e. non-empty Summary). Dropped items are not stored.
+	for order, i := range kept {
+		s := summaries[i]
 		catName := s.Category
 		if !categorySet[catName] {
 			catName = settings.UncategorizedLabel
@@ -239,7 +248,7 @@ func (c *Cycle) Run(ctx context.Context, windowStart, windowEnd time.Time) (stri
 			MediaKind:   store.MediaKind(items[i].MediaKind),
 			Summary:     s.Summary,
 			Confidence:  s.Confidence,
-			Ordering:    i,
+			Ordering:    order,
 		})
 	}
 
@@ -254,7 +263,7 @@ func (c *Cycle) Run(ctx context.Context, windowStart, windowEnd time.Time) (stri
 	if sendStatus != store.SendOK {
 		status = store.CycleFailed
 	}
-	_ = c.finishCycle(ctx, cycleID, status, len(items), len(summaries), "")
+	_ = c.finishCycle(ctx, cycleID, status, len(items), len(kept), "")
 	log.Info("cycle.done", "status", status, "items", len(summaries))
 
 	return cycleID, nil
@@ -262,7 +271,11 @@ func (c *Cycle) Run(ctx context.Context, windowStart, windowEnd time.Time) (stri
 
 // summarizeBatch runs the summarizer over all items with a concurrency
 // limit. If any call returns ErrUnavailable, the cycle is marked degraded
-// and the remaining items use raw text as the summary.
+// and the remaining items use raw text as the summary. ErrCategoryUnknown
+// is mapped to the configured uncategorized_label (when the returned
+// category is not in the configured set or is empty) and emits a warn
+// event for taxonomy tuning. ErrInvalidInput drops the item and emits a
+// warn event.
 func (c *Cycle) summarizeBatch(ctx context.Context, items []Item, categories map[string]bool, uncategorized string) ([]ai.Output, bool) {
 	out := make([]ai.Output, len(items))
 	degraded := false
@@ -285,20 +298,75 @@ func (c *Cycle) summarizeBatch(ctx context.Context, items []Item, categories map
 				Captions:      item.Captions,
 			})
 			if err != nil {
-				mu.Lock()
-				if err == ai.ErrUnavailable || err != ai.ErrInvalidInput {
+				switch {
+				case errors.Is(err, ai.ErrInvalidInput):
+					// Drop the item; record a warn event.
+					mu.Lock()
+					out[idx] = ai.Output{}
+					mu.Unlock()
+					_ = c.deps.Health.RecordEvent(ctx, store.OpEvent{
+						OccurredAt: time.Now().UTC(),
+						Level:      "warn",
+						Kind:       "ai.invalid_input",
+						Message:    "dropped item: " + err.Error(),
+					})
+					return
+				case errors.Is(err, ai.ErrCategoryUnknown):
+					// Accept the returned Output (the contract allows the
+					// implementation to populate Summary + a suggested
+					// category). If the suggested category is empty or not
+					// in the configured set, substitute uncategorized_label.
+					cat := o.Category
+					if cat == "" || !categories[cat] {
+						cat = uncategorized
+					}
+					mu.Lock()
+					out[idx] = ai.Output{
+						Summary:    o.Summary,
+						Category:   cat,
+						Confidence: o.Confidence,
+					}
+					mu.Unlock()
+					_ = c.deps.Health.RecordEvent(ctx, store.OpEvent{
+						OccurredAt: time.Now().UTC(),
+						Level:      "warn",
+						Kind:       "ai.category_unknown",
+						Message:    "category not in configured set: " + o.Category,
+					})
+					return
+				default:
+					// Treat any other error (including ErrUnavailable) as
+					// a degraded cycle. Fall back to raw text under the
+					// uncategorized label.
+					mu.Lock()
 					degraded = true
-					// Fall back to raw text (truncated).
 					raw := item.Text
 					if len(raw) > 280 {
 						raw = raw[:277] + "…"
 					}
 					out[idx] = ai.Output{Summary: raw, Category: uncategorized, Confidence: 0}
+					mu.Unlock()
+					_ = c.deps.Health.RecordEvent(ctx, store.OpEvent{
+						OccurredAt: time.Now().UTC(),
+						Level:      "warn",
+						Kind:       "ai.unavailable",
+						Message:    "summarizer unavailable: " + err.Error(),
+					})
+					return
 				}
-				mu.Unlock()
-				return
 			}
 			mu.Lock()
+			// If the AI returned a category not in our set (without raising
+			// ErrCategoryUnknown), coerce to uncategorized.
+			if o.Category != "" && !categories[o.Category] {
+				_ = c.deps.Health.RecordEvent(ctx, store.OpEvent{
+					OccurredAt: time.Now().UTC(),
+					Level:      "warn",
+					Kind:       "ai.category_unknown",
+					Message:    "category not in configured set: " + o.Category,
+				})
+				o.Category = uncategorized
+			}
 			out[idx] = o
 			mu.Unlock()
 		}(i, it)

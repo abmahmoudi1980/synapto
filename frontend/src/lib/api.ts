@@ -68,6 +68,17 @@ export const api = {
 
 	removeChannel: (id: string): Promise<void> => request('DELETE', `/api/channels/${id}`),
 
+	// Categories
+	listCategories: (): Promise<{ categories: Category[] }> => request('GET', '/api/categories'),
+
+	addCategory: (name: string): Promise<{ category: Category }> =>
+		request('POST', '/api/categories', { name }),
+
+	renameCategory: (id: string, name: string): Promise<{ category: Category }> =>
+		request('PATCH', `/api/categories/${id}`, { name }),
+
+	removeCategory: (id: string): Promise<void> => request('DELETE', `/api/categories/${id}`),
+
 	// Health
 	getHealth: (): Promise<Health> => request('GET', '/api/health')
 };

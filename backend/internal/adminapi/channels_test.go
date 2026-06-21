@@ -134,7 +134,9 @@ func TestChannels_DeleteHappyPath(t *testing.T) {
 	ts, _ := newTestServer(t)
 	res := tsPOST(t, ts, "/api/channels", `{"handle":"sample_news"}`)
 	var resp struct {
-		Channel struct{ ID string `json:"id"` } `json:"channel"`
+		Channel struct {
+			ID string `json:"id"`
+		} `json:"channel"`
 	}
 	decodeBody(t, res, &resp)
 
@@ -178,6 +180,20 @@ func tsDELETE(t *testing.T, ts *httptest.Server, path string) *http.Response {
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("DELETE %s: %v", path, err)
+	}
+	return res
+}
+
+func tsPATCH(t *testing.T, ts *httptest.Server, path, body string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest("PATCH", ts.URL+path, bytes.NewBufferString(body))
+	if err != nil {
+		t.Fatalf("PATCH %s: %v", path, err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PATCH %s: %v", path, err)
 	}
 	return res
 }
