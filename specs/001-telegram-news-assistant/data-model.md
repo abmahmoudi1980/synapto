@@ -1,0 +1,264 @@
+# Data Model: Telegram News Digest Assistant
+
+**Feature**: 001-telegram-news-assistant
+**Date**: 2026-06-21
+**Purpose**: Translate the Key Entities in `spec.md` into a concrete relational schema, repository interfaces, and state-transition rules. This is the contract the Go `internal/store` package implements.
+
+## Storage engine
+
+- **Engine**: SQLite (WAL mode) via `modernc.org/sqlite`.
+- **File**: a single file at the path given by `DB_PATH` (default `./assistant.db`).
+- **Concurrency model**: a single writer (the cycle goroutine), many readers (the admin API). The Go store layer serializes writes with a single internal mutex to keep the WAL simple.
+- **Migrations**: plain SQL files in `backend/migrations/`, embedded via `//go:embed` and applied in lexical order at startup. One initial migration: `0001_init.sql`.
+
+## Schema (initial migration `0001_init.sql`)
+
+All tables use `INTEGER PRIMARY KEY` (SQLite rowid) for the internal id, plus a string `id` (UUIDv4) for external references. Timestamps are stored as ISO-8601 UTC strings to keep the schema greppable.
+
+```sql
+-- Channels the subscriber wants monitored
+CREATE TABLE channels (
+  id              TEXT PRIMARY KEY,           -- UUID
+  handle          TEXT NOT NULL UNIQUE,       -- e.g. "durov" or "@durov"; stored without leading "@"
+  display_name    TEXT NOT NULL,              -- last known title from Telegram
+  status          TEXT NOT NULL,              -- 'active' | 'inaccessible' | 'banned'
+  last_seen_msg_id INTEGER NOT NULL DEFAULT 0, -- cursor: max Telegram message id seen
+  last_observed_at TEXT,                      -- ISO-8601 UTC, nullable
+  last_error      TEXT,                       -- nullable
+  created_at      TEXT NOT NULL,
+  updated_at      TEXT NOT NULL
+);
+CREATE INDEX idx_channels_status ON channels(status);
+
+-- Categories used to group digest items
+CREATE TABLE categories (
+  id           TEXT PRIMARY KEY,    -- UUID
+  name         TEXT NOT NULL UNIQUE,
+  ordering     INTEGER NOT NULL DEFAULT 0,
+  is_default   INTEGER NOT NULL    -- 0 custom, 1 default (defaults cannot be deleted, only renamed)
+                  CHECK (is_default IN (0, 1)),
+  created_at   TEXT NOT NULL,
+  updated_at   TEXT NOT NULL
+);
+CREATE INDEX idx_categories_ordering ON categories(ordering, name);
+
+-- A single operational settings row (id = 'singleton')
+CREATE TABLE settings (
+  id                       TEXT PRIMARY KEY CHECK (id = 'singleton'),
+  digest_interval_seconds  INTEGER NOT NULL,    -- default 600
+  telegram_bot_token_ref   TEXT NOT NULL,       -- secret reference; raw value lives in env
+  telegram_subscriber_chat INTEGER NOT NULL,    -- chat id of the subscriber
+  ai_provider              TEXT NOT NULL,       -- 'openai' | 'fake' | future
+  ai_model                 TEXT NOT NULL,       -- e.g. 'gpt-4o-mini'
+  ai_api_key_ref           TEXT NOT NULL,       -- secret reference
+  ai_base_url              TEXT NOT NULL,       -- e.g. 'https://api.openai.com/v1'
+  uncategorized_label      TEXT NOT NULL DEFAULT 'Uncategorized',
+  updated_at               TEXT NOT NULL
+);
+
+-- One row per cycle execution
+CREATE TABLE cycles (
+  id              TEXT PRIMARY KEY,            -- UUID; same as cycle_id in logs
+  window_start    TEXT NOT NULL,               -- ISO-8601 UTC
+  window_end      TEXT NOT NULL,               -- ISO-8601 UTC
+  status          TEXT NOT NULL,               -- 'pending' | 'succeeded' | 'failed' | 'degraded' | 'skipped_no_items'
+  input_msg_count INTEGER NOT NULL DEFAULT 0,
+  output_items    INTEGER NOT NULL DEFAULT 0,
+  error           TEXT,                        -- nullable
+  started_at      TEXT NOT NULL,
+  finished_at     TEXT,                        -- nullable
+  CHECK (status IN ('pending','succeeded','failed','degraded','skipped_no_items'))
+);
+CREATE INDEX idx_cycles_window_end ON cycles(window_end DESC);
+CREATE INDEX idx_cycles_status ON cycles(status);
+
+-- A delivered digest (one row per cycle, present iff a message was actually delivered)
+CREATE TABLE digests (
+  id             TEXT PRIMARY KEY,            -- UUID
+  cycle_id       TEXT NOT NULL UNIQUE REFERENCES cycles(id) ON DELETE CASCADE,
+  rendered_text  TEXT NOT NULL,               -- the exact message text sent to Telegram
+  degraded       INTEGER NOT NULL DEFAULT 0   -- 1 if the cycle fell back to raw headlines
+                 CHECK (degraded IN (0, 1)),
+  telegram_msg_id INTEGER,                     -- the id Telegram assigned to the sent message; nullable
+  sent_at        TEXT NOT NULL,
+  send_status    TEXT NOT NULL                 -- 'ok' | 'failed' | 'blocked'
+                 CHECK (send_status IN ('ok','failed','blocked'))
+);
+CREATE INDEX idx_digests_sent_at ON digests(sent_at DESC);
+
+-- One row per source message observed during a cycle
+CREATE TABLE digest_items (
+  id              TEXT PRIMARY KEY,
+  cycle_id        TEXT NOT NULL REFERENCES cycles(id) ON DELETE CASCADE,
+  channel_id      TEXT NOT NULL REFERENCES channels(id) ON DELETE RESTRICT,
+  category_id     TEXT REFERENCES categories(id) ON DELETE SET NULL, -- nullable when no category matches
+  source_msg_id   INTEGER NOT NULL,            -- Telegram message id
+  dedup_key       TEXT NOT NULL,               -- sha256(normalized_text) | sha256(media_signature)
+  raw_text        TEXT NOT NULL,               -- captured text, may be empty for media-only
+  media_kind      TEXT NOT NULL,               -- 'text' | 'image' | 'video' | 'voice' | 'other'
+  summary         TEXT NOT NULL,               -- the summary that went into the digest
+  confidence      REAL,                         -- 0..1 from AI, nullable
+  ordering        INTEGER NOT NULL DEFAULT 0,  -- per-category order
+  UNIQUE (cycle_id, channel_id, source_msg_id)
+);
+CREATE INDEX idx_items_cycle ON digest_items(cycle_id, ordering);
+CREATE INDEX idx_items_channel ON digest_items(channel_id);
+CREATE INDEX idx_items_dedup ON digest_items(dedup_key);
+
+-- A short audit log of operational events (last N rows, ring-buffered)
+CREATE TABLE op_events (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  occurred_at TEXT NOT NULL,
+  level       TEXT NOT NULL,                   -- 'info' | 'warn' | 'error'
+  kind        TEXT NOT NULL,                   -- e.g. 'cycle.start', 'cycle.success', 'telegram.send.failed'
+  cycle_id    TEXT,                            -- nullable
+  message     TEXT NOT NULL,
+  context     TEXT                             -- JSON blob, nullable
+);
+CREATE INDEX idx_op_events_at ON op_events(occurred_at DESC);
+```
+
+## Repository interfaces (Go)
+
+All interfaces live in `internal/store`. One concrete implementation (`internal/store/sqlite`) implements them. The cycle and the admin API depend only on the interfaces, not on the concrete type.
+
+```go
+type ChannelRepo interface {
+    List(ctx context.Context) ([]Channel, error)
+    Get(ctx context.Context, id string) (Channel, error)
+    GetByHandle(ctx context.Context, handle string) (Channel, error)
+    Add(ctx context.Context, handle, displayName string) (Channel, error)     // rejects duplicates, validates handle
+    Remove(ctx context.Context, id string) error
+    UpdateStatus(ctx context.Context, id string, status ChannelStatus, errMsg string) error
+    AdvanceCursor(ctx context.Context, id string, lastSeenMsgID int64, observedAt time.Time) error
+}
+
+type CategoryRepo interface {
+    List(ctx context.Context) ([]Category, error)
+    Add(ctx context.Context, name string) (Category, error)
+    Rename(ctx context.Context, id, newName string) (Category, error)
+    Remove(ctx context.Context, id string) error                                // refuses to remove defaults
+    EnsureDefaults(ctx context.Context, defaults []string) error                -- called once at first boot
+}
+
+type SettingsRepo interface {
+    Get(ctx context.Context) (Settings, error)                                  -- returns seeded defaults if no row
+    Update(ctx context.Context, s Settings) (Settings, error)                    -- partial updates via pointer fields
+}
+
+type CycleRepo interface {
+    Create(ctx context.Context, c Cycle) error
+    Finish(ctx context.Context, id string, status CycleStatus, inputCount, outputItems int, errMsg string) error
+    LastSuccessfulWindowEnd(ctx context.Context) (time.Time, bool, error)       -- used by scheduler on restart
+    List(ctx context.Context, limit, offset int) ([]Cycle, error)
+    Get(ctx context.Context, id string) (Cycle, error)
+}
+
+type DigestRepo interface {
+    Create(ctx context.Context, d Digest) error
+    UpdateSendResult(ctx context.Context, id string, telegramMsgID int64, status SendStatus) error
+    ListByCycle(ctx context.Context, cycleID string) ([]DigestItem, error)
+    ListRecent(ctx context.Context, limit int) ([]DigestListEntry, error)         -- joined with cycles for the history view
+    GetByCycle(ctx context.Context, cycleID string) (Digest, error)
+}
+
+type CursorRepo interface {                                                       -- thin convenience on top of channels
+    Get(ctx context.Context, channelID string) (lastSeenMsgID int64, err error)
+    Advance(ctx context.Context, channelID string, toMsgID int64) error
+}
+
+type HealthRepo interface {
+    Snapshot(ctx context.Context) (Health, error)                                  -- last success, last failure, per-channel status
+    RecordEvent(ctx context.Context, e OpEvent) error                              -- also writes to op_events
+    RecentEvents(ctx context.Context, limit int) ([]OpEvent, error)
+}
+```
+
+## Entity reference (aligned with `spec.md`)
+
+| Spec entity | DB rows | Notes |
+|---|---|---|
+| **Subscriber** | implicit (one row in `settings` with `telegram_subscriber_chat`) | single-subscriber phase 1 |
+| **Source Channel** | `channels` | `status`, `last_seen_msg_id`, `last_observed_at`, `last_error` capture the lifecycle |
+| **Source Message** | `digest_items.raw_text` + `source_msg_id` + `dedup_key` + `media_kind` | captured at fetch time, never re-fetched |
+| **Digest Item** | `digest_items` (after summarization) | the summary text and assigned category |
+| **Category** | `categories` | `is_default` flag protects shipped categories from deletion |
+| **Digest Cycle** | `cycles` | one row per scheduled execution, including skipped / failed ones |
+| **Digest Record** | `digests` (1:1 with successful or degraded cycles) | the exact text that was sent to Telegram |
+| **Operator Configuration** | `settings` (single row) | credentials are referenced by name, not stored |
+| **Operational Health Snapshot** | derived view over `cycles` + `channels` + `op_events` | computed on read by `HealthRepo.Snapshot` |
+
+## State transitions
+
+### Channel lifecycle
+
+```
+            Add (admin)
+   (none) ─────────────► active ─────► inaccessible ─────► banned
+                            ▲                │                  │
+                            └──── re-Add ────┘                  │
+                                                               │
+                                          Remove (admin) ◄─────┘
+```
+
+- `Add` validates the handle (must match `^[A-Za-z][A-Za-z0-9_]{3,31}[A-Za-z0-9]$` after stripping a leading `@`), calls the Telegram `getChat` method to confirm the channel exists, and stores the row in `active`.
+- A cycle that fails to read a channel (channel went private, bot kicked) marks the channel `inaccessible` with `last_error` populated.
+- Repeated inaccessible state (configurable threshold, default 3 consecutive cycles) promotes the channel to `banned`, which is shown in the admin panel with a clear badge and is excluded from future fetches.
+- `Remove` deletes the channel; the foreign key on `digest_items.channel_id` is `ON DELETE RESTRICT` so removal of a channel with history is refused with a clear error.
+
+### Cycle lifecycle
+
+```
+   scheduled tick
+        │
+        ▼
+    pending ──► succeeded          (delivered digest, no degradation)
+        │  ──► degraded            (delivered digest with raw headlines; AI failed)
+        │  ──► skipped_no_items    (no new items in any channel)
+        │  ──► failed              (could not deliver; failure recorded)
+```
+
+- A cycle is created `pending` before fetches start.
+- The cycle is finished exactly once, with one of the four terminal states.
+- The scheduler reads `LastSuccessfulWindowEnd` on startup to compute the first post-restart window (FR-016, SC-008). If the last cycle's window is still "open" (i.e. less than `digest_interval_seconds` has passed since its end), the scheduler waits the remainder; if the window is already "overdue", the next cycle starts immediately with `window_start = last_window_end`.
+
+### Category lifecycle
+
+```
+   shipped defaults (EnsureDefaults, run once)
+        │
+        ▼
+   default ◄──── rename (admin) ──── default
+        │
+        │  add (admin)
+        ▼
+   custom ──── rename (admin) ───► custom
+        │
+        │  remove (admin)
+        ▼
+   (deleted)   -- only for custom; defaults refuse Remove
+```
+
+- `EnsureDefaults` is idempotent: at first boot it inserts the shipped set (Politics, Technology, Business, Sports, World, Other) marked `is_default = 1`; on subsequent boots it is a no-op.
+- `Remove` of a default category returns an error surfaced in the admin panel: "Cannot remove a built-in category; rename it instead."
+
+## Validation rules (enforced in the store layer)
+
+- **Channel handle**: must match `^[A-Za-z][A-Za-z0-9_]{3,31}[A-Za-z0-9]$`; leading `@` is stripped before storage and comparison.
+- **Channel existence**: `Add` calls the Telegram `getChat` API; failures (404, bot not in channel) are surfaced as admin-panel errors and the row is not stored.
+- **Category name**: trimmed, non-empty, length 1–40, unique case-insensitively, not equal to `uncategorized_label` from settings.
+- **Digest interval**: integer seconds, 60 ≤ value ≤ 86400 (one minute to one day). Values outside this range are rejected with a clear error.
+- **Credentials**: settings stores `*_ref` strings (e.g. `env:TELEGRAM_BOT_TOKEN`); the store layer never accepts raw secret values. The main process resolves the refs at startup and at update time and refuses to start if any ref is unresolvable.
+- **Cycle idempotency**: the unique constraint on `(cycle_id, channel_id, source_msg_id)` and the unique key on `digests.cycle_id` make it safe to retry any step of the cycle without producing duplicates; the cycle uses `INSERT ... ON CONFLICT DO NOTHING` for `digest_items` so a partial replay is safe.
+
+## Initial seed data
+
+- `categories` rows for the shipped defaults.
+- `settings` row with sensible defaults (`digest_interval_seconds = 600`, `uncategorized_label = 'Uncategorized'`, `ai_provider = 'fake'` when no AI env is set so a fresh boot is safe and self-testing).
+- No `channels` rows, no `cycles` rows, no `digests` rows.
+
+## Migration policy
+
+- Migrations are append-only SQL files in `backend/migrations/`, named `NNNN_description.sql`.
+- The store layer records applied migrations in a `schema_migrations` table (`version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL`).
+- A failed migration aborts startup with the exact error; the DB is not touched.

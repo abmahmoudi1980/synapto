@@ -1,0 +1,36 @@
+# Build output
+bin/
+backend/bin/
+dist/
+
+# Frontend
+frontend/node_modules/
+frontend/build/
+frontend/.svelte-kit/
+frontend/.vite/
+
+# Backend runtime artifacts (referenced in specs/001-telegram-news-assistant/quickstart.md)
+.runtime/
+*.db
+*.db-shm
+*.db-wal
+
+# Local agent / IDE state
+.opencode/
+
+# Local Spec Kit state
+.specify/feature.json
+.specify/integration.json
+.specify/extensions/.registry
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+
+# Environment
+.env
+.env.local
+*.env.local

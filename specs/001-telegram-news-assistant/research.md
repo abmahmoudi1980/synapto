@@ -1,0 +1,157 @@
+# Research: Telegram News Digest Assistant
+
+**Feature**: 001-telegram-news-assistant
+**Date**: 2026-06-21
+**Purpose**: Resolve all `NEEDS CLARIFICATION` markers from the plan, and document the non-obvious technology decisions required to implement the spec.
+
+## Unknowns surfaced by the Technical Context
+
+The plan's Technical Context did not contain any explicit `NEEDS CLARIFICATION` markers, but six real decisions were identified while writing the plan. They are resolved below.
+
+---
+
+## R1. How does the service read channel messages — Bot API or MTProto (gotd/td)?
+
+**Decision**: Use the **Telegram Bot API** (server-side, requires a `@BotFather` token) for both reading source channels and sending the digest. The read side is restricted to channels where the designated bot is a member (for private channels) or that the bot has explicitly joined (for public channels). The service does not backfill history — it tracks a per-channel cursor (`last_seen_message_id`) and only processes new messages from the cursor forward.
+
+**Rationale**:
+- The spec explicitly states "designated Telegram bot" and the assumption section commits to a single bot identity. Using MTProto (a user-account client like `gotd/td`) would introduce a second identity, violate the assumption, and require storing a session string — a non-trivial secret.
+- The Bot API is well-documented, has a stable Go client (`go-telegram-bot-api/v5`), and the volume of messages per cycle in phase 1 (tens, not thousands) is well within Bot API limits.
+- Per-channel cursors make the "no backfill, no double-deliver" requirement trivial: each cycle only ever sees messages with id > cursor.
+
+**Alternatives considered**:
+- **`gotd/td` (MTProto user client)**: more powerful, can read any public channel without joining, supports deep history. Rejected because (a) it requires a user account, contradicting the "designated bot" constraint, and (b) it stores a session string that is harder to rotate than a bot token.
+- **Telegram's official `telegram-bot-api` server (C++) with `forwardMessage` from a user account**: rejected — same issue as `gotd/td` and adds a separate process to operate.
+
+**Consequences carried into the design**:
+- A channel must be added to the bot's membership list before it can be read. The admin panel must surface channels the bot is not yet a member of so the operator can invite the bot (e.g., via the channel's admin UI). The service treats "bot not in channel" as a per-channel error state, not a global failure (edge case: "Channel privacy / access").
+- Reading is restricted to messages posted after the bot joined. The cycle is therefore purely a forward-looking sweep; no historical messages are ever processed.
+
+---
+
+## R2. Which Go Telegram library?
+
+**Decision**: `github.com/go-telegram-bot-api/telegram-bot-api/v5` for the read and send paths. It is the de-facto Go Bot API client, has stable releases, and supports long polling and webhook modes (we will use **long polling via `getUpdates`** for the cycle, since we don't need to receive user messages in phase 1; the long-polling loop is short-lived per cycle and exits after we have all new channel posts or after a short timeout).
+
+**Rationale**: Mature, widely deployed, small surface, and avoids the session-management complexity of `gotd/td`. Phase 1 doesn't need MTProto features (typing indicators, secret chats, full chat list).
+
+**Alternatives considered**:
+- `telegram-bot-api` (the C++ server): we use the Bot API HTTP endpoints, not this.
+- `gotd/td`: rejected in R1.
+- Hand-rolled HTTP client: rejected — `go-telegram-bot-api/v5` already does retries, error decoding, and rate-limit handling.
+
+**Consequences**:
+- The fetcher and sender interfaces in `internal/telegram` wrap `go-telegram-bot-api` so the cycle logic is testable with an in-memory fake.
+
+---
+
+## R3. AI summarizer interface and default provider
+
+**Decision**: Define a single Go interface, `ai.Summarizer`, in `internal/ai/summarizer.go`:
+
+```go
+type Input struct {
+    ChannelHandle string
+    Text          string
+    MediaKind     string // "text" | "image" | "video" | "voice" | "other"
+    Captions      []string
+}
+
+type Output struct {
+    Summary   string
+    Category  string
+    Confidence float64 // 0..1; 0 if unknown
+}
+
+type Summarizer interface {
+    Summarize(ctx context.Context, in Input) (Output, error)
+}
+```
+
+The default implementation targets the **OpenAI Chat Completions API** (works for OpenAI proper and for any compatible endpoint such as OpenRouter, Together, vLLM with an OpenAI-compatible server, or local llama.cpp). A second implementation, `ai.FakeSummarizer`, is used in tests and is wired by default when `ASSISTANT_AI_PROVIDER=fake`.
+
+**Rationale**: A single, narrow interface keeps the cycle logic provider-agnostic (FR-018). The OpenAI-compatible standard is the widest portable target in 2026 and gives the operator freedom to swap providers without recompiling.
+
+**Alternatives considered**:
+- Anthropic Messages API as the default: rejected as the default because the OpenAI-compatible target has more compatible upstreams; the `Summarizer` interface is provider-agnostic anyway and an Anthropic adapter is a small follow-up.
+- Local model only: rejected as the default because phase 1 prioritizes correctness over cost; the interface allows a local adapter later.
+
+**Consequences**:
+- The cycle has a hard per-call timeout (default 8s) and a hard per-cycle budget (default 45s total). On any summarizer error or timeout, the affected item is emitted as a "raw headline" digest entry (degraded mode).
+- Categories returned by the AI must match a category in the configured set; if the AI returns an unknown category, the cycle falls back to the configured "uncategorized" label and the value is logged for later taxonomy tuning.
+
+---
+
+## R4. Storage: SQLite vs PostgreSQL
+
+**Decision**: **SQLite** via `modernc.org/sqlite` (pure Go, no CGo) for phase 1. The DB is a single file owned by the Go process; WAL mode is enabled for safe concurrent reads from the admin API while the cycle writes.
+
+**Rationale**:
+- The spec's scale is small (1 subscriber, tens of channels, ~10⁴–10⁵ digests/year). SQLite is well within its comfort zone.
+- A single-file DB makes "single binary, single artifact" deploys trivial — no separate DB process to operate.
+- `modernc.org/sqlite` removes the CGo toolchain requirement, which is a major portability win for cross-compilation.
+
+**Alternatives considered**:
+- **PostgreSQL**: stronger under heavy concurrent writes, better for future multi-subscriber. Rejected for phase 1 because it adds a second deployable and a network round-trip for every cycle. The repository layer in `internal/store` is interface-driven so a Postgres adapter can be added later without changing cycle logic.
+- **BoltDB / bbolt**: rejected because we want a relational schema (joins across `digests`, `digest_items`, `channels`, `categories`).
+
+**Consequences**:
+- The repository layer in `internal/store` exposes interfaces (`ChannelRepo`, `CategoryRepo`, `DigestRepo`, `CursorRepo`, `HealthRepo`, `SettingsRepo`) backed by a single SQLite implementation in phase 1.
+- A future PostgreSQL adapter would implement the same interfaces.
+
+---
+
+## R5. Admin panel deployment model: embedded SPA vs separate origin
+
+**Decision**: Build the SvelteKit admin panel with `@sveltejs/adapter-static` and embed the resulting static assets into the Go binary via `//go:embed`. The Go admin HTTP server serves the SPA at `/` and the JSON admin API at `/api/*`. A single binary, a single port, no CORS surface, no separate static host.
+
+**Rationale**:
+- Matches the spec's "single logical deployment" assumption and the operator's "one service" mental model.
+- Eliminates CORS, separate auth, and cross-origin cookie configuration — the SPA and the API share an origin.
+- `//go:embed` is a standard, well-supported Go feature.
+
+**Alternatives considered**:
+- **Separate frontend + backend deployments**: rejected because it doubles the deploy surface and forces the operator to manage CORS, cookies, and two service endpoints for a phase-1 single-subscriber service.
+- **Server-side SvelteKit (Node)**: rejected because the spec calls for a Svelte frontend, not a SvelteKit Node server, and the embed approach is simpler and faster.
+
+**Consequences**:
+- The admin panel does not require its own server runtime (no Node process in production).
+- Frontend builds must complete before the Go binary is built; the `Makefile` enforces this order.
+
+---
+
+## R6. Scheduler: built-in ticker vs library
+
+**Decision**: A small in-process scheduler built on `time.Ticker` plus an explicit "fire and queue" guard (a mutex + a `state` field on the cycle) so a cycle never overlaps itself. A long cycle is allowed to slip the next fire; we never start a new cycle before the previous one finishes.
+
+**Rationale**: The cycle is a single goroutine in a single process. A library like `robfig/cron` is overkill for a single periodic job, and the in-house version is < 60 lines and easy to reason about.
+
+**Alternatives considered**:
+- `robfig/cron/v3`: rejected for phase 1 because we have exactly one periodic job and no need for cron expressions; the operator configures the interval as a duration.
+- External scheduler (systemd timer, k8s CronJob): rejected because we want the cycle to react to configuration changes (FR-013, FR-016) without redeploying, and we want restart-safe cursor handling in-process.
+
+**Consequences**:
+- The scheduler is a `digest.Scheduler` type with a single `Run(ctx)` method. It owns the mutex and the "is a cycle running" state.
+- On restart, the scheduler reads the last successful cycle's window-end timestamp and the per-channel cursors, so the first post-restart cycle picks up exactly where the last one stopped — satisfying FR-016 and SC-008.
+
+---
+
+## Cross-cutting design decisions
+
+- **Configuration loading**: env-driven via `caarlos0/env/v10`. A `.env` file (gitignored) is allowed for local dev. Required envs: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_SUBSCRIBER_CHAT_ID`, `AI_BASE_URL`, `AI_API_KEY`, `AI_MODEL`, `ADMIN_LISTEN_ADDR` (default `:8080`), `DIGEST_INTERVAL` (default `10m`), `DB_PATH` (default `./assistant.db`).
+- **Logging**: `log/slog` with a JSON handler in production, a text handler in dev. Cycle logs include `cycle_id`, `window_start`, `window_end`, `message_count`, `summary_count`, `telegram_send_ok`, `duration_ms`.
+- **Authentication for the admin API**: not in scope for phase 1 (single-tenant, single operator). The admin API binds to a configurable address and the operator is expected to put it behind a reverse proxy / VPN. This is explicitly documented in the **Assumptions** of the spec and is called out as a follow-up in the plan.
+- **Testing strategy**:
+  - Unit tests for the deduper, the renderer, and the categorizer fallback.
+  - Golden-file tests for the digest renderer (one fixture per category-bucket layout).
+  - A full end-to-end cycle test using the fake Telegram client and the fake AI summarizer, asserting: cursors advance, dedup works, a single digest is produced, no item is sent twice, a degraded cycle is still recorded.
+  - Svelte component smoke tests for the admin panel (one render test per page).
+
+---
+
+## Open questions / follow-ups (not blocking)
+
+- **Auth for the admin API**: explicitly deferred (single-tenant, single operator). When the service grows past one human, the API should add a session cookie + a single admin password read from env.
+- **Multi-subscriber / multi-tenant**: out of scope; the SQLite schema is intentionally minimal and would need `subscriber_id` columns added throughout if revisited.
+- **OCR / ASR for non-text messages**: out of scope for phase 1; non-text items are emitted with a `[Image]` / `[Video]` / `[Voice]` marker and the original caption if any (FR-017).
+- **Horizontal scaling**: out of scope; the single-process design is a hard constraint and the scheduler's mutex model is the right shape for a single node.
