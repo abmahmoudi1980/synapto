@@ -171,15 +171,15 @@ description: "Task list for the Telegram News Digest Assistant feature"
 
 ### Tests for User Story 5
 
-- [ ] T052 [P] [US5] Admin API contract test for cycles and events (list, get with items grouped by category, events newest-first) in `backend/internal/adminapi/history_test.go`
+- [X] T052 [P] [US5] Admin API contract test for cycles and events (list, get with items grouped by category, events newest-first) in `backend/internal/adminapi/history_test.go`
 
 ### Implementation for User Story 5
 
-- [ ] T053 [P] [US5] Admin API handlers in `backend/internal/adminapi/history.go` for `GET /api/cycles?limit=&offset=`, `GET /api/cycles/{id}`, `GET /api/events?limit=`
-- [ ] T054 [P] [US5] Frontend `DigestViewer` component in `frontend/src/lib/components/DigestViewer.svelte` (renders the same MarkdownV2-aware text as Telegram, per category)
-- [ ] T055 [P] [US5] Frontend History list page in `frontend/src/routes/history/+page.svelte` (depends on T054)
-- [ ] T056 [P] [US5] Frontend History detail page in `frontend/src/routes/history/[id]/+page.svelte` (depends on T054)
-- [ ] T057 [US5] Wire history handlers in `main.go` and confirm Track A step A6 of `quickstart.md` (depends on T053, T056)
+- [X] T053 [P] [US5] Admin API handlers in `backend/internal/adminapi/history.go` for `GET /api/cycles?limit=&offset=`, `GET /api/cycles/{id}`, `GET /api/events?limit=`
+- [X] T054 [P] [US5] Frontend `DigestViewer` component in `frontend/src/lib/components/DigestViewer.svelte` (renders the same MarkdownV2-aware text as Telegram, per category)
+- [X] T055 [P] [US5] Frontend History list page in `frontend/src/routes/history/+page.svelte` (depends on T054)
+- [X] T056 [P] [US5] Frontend History detail page in `frontend/src/routes/history/[id]/+page.svelte` (depends on T054)
+- [X] T057 [US5] Wire history handlers in `main.go` and confirm Track A step A6 of `quickstart.md` (depends on T053, T056)
 
 **Checkpoint**: All five user stories are now functional; the history view completes the audit trail.
 

@@ -42,6 +42,70 @@ export interface Health {
 	db_ok: boolean;
 }
 
+export interface CycleListEntry {
+	id: string;
+	window_start: string;
+	window_end: string;
+	status: 'pending' | 'succeeded' | 'failed' | 'degraded' | 'skipped_no_items';
+	input_msg_count: number;
+	output_items: number;
+	degraded: boolean;
+	started_at: string;
+	finished_at: string;
+}
+
+export interface DigestItemChannel {
+	id: string;
+	handle: string;
+	display_name: string;
+}
+
+export interface DigestItem {
+	id: string;
+	channel: DigestItemChannel;
+	source_msg_id: number;
+	media_kind: string;
+	summary: string;
+	confidence: number | null;
+}
+
+export interface CategorySummary {
+	id: string;
+	name: string;
+	ordering: number;
+	is_default: boolean;
+}
+
+export interface ItemsByCategory {
+	category: CategorySummary;
+	items: DigestItem[];
+}
+
+export interface DigestInfo {
+	id: string;
+	rendered_text: string;
+	degraded: boolean;
+	telegram_msg_id: number | null;
+	sent_at: string;
+	send_status: 'ok' | 'failed' | 'blocked';
+}
+
+export interface CycleDetail {
+	cycle: CycleListEntry;
+	digest: DigestInfo;
+	items_by_category: ItemsByCategory[];
+}
+
+export interface OpEvent {
+	id: number;
+	occurred_at: string;
+	level: 'info' | 'warn' | 'error';
+	kind: string;
+	cycle_id?: string;
+	message: string;
+	context?: string;
+}
+
 export interface ApiError {
 	error: {
 		code: string;
@@ -111,5 +175,26 @@ export const api = {
 		request('POST', '/api/settings/test-ai', {}),
 
 	// Health
-	getHealth: (): Promise<Health> => request('GET', '/api/health')
+	getHealth: (): Promise<Health> => request('GET', '/api/health'),
+
+	// History
+	listCycles: (params?: {
+		limit?: number;
+		offset?: number;
+	}): Promise<{ cycles: CycleListEntry[]; total: number }> => {
+		const q = new URLSearchParams();
+		if (params?.limit !== undefined) q.set('limit', String(params.limit));
+		if (params?.offset !== undefined) q.set('offset', String(params.offset));
+		const qs = q.toString();
+		return request('GET', `/api/cycles${qs ? '?' + qs : ''}`);
+	},
+
+	getCycle: (id: string): Promise<CycleDetail> => request('GET', `/api/cycles/${id}`),
+
+	listEvents: (params?: { limit?: number }): Promise<{ events: OpEvent[] }> => {
+		const q = new URLSearchParams();
+		if (params?.limit !== undefined) q.set('limit', String(params.limit));
+		const qs = q.toString();
+		return request('GET', `/api/events${qs ? '?' + qs : ''}`);
+	}
 };

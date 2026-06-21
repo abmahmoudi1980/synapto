@@ -95,6 +95,7 @@ func (s *Server) buildRouter() chi.Router {
 		s.registerChannelRoutes(r)
 		s.registerCategoryRoutes(r)
 		s.registerSettingsRoutes(r)
+		s.registerHistoryRoutes(r)
 	})
 
 	// SPA fallback (serves frontend/build/ via //go:embed).

@@ -20,6 +20,7 @@ type opEventRow struct {
 
 func (r opEventRow) toEntity() store.OpEvent {
 	return store.OpEvent{
+		ID:         r.ID,
 		OccurredAt: parseTimeStr(r.OccurredAt),
 		Level:      r.Level,
 		Kind:       r.Kind,

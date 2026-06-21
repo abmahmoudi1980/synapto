@@ -90,6 +90,12 @@ func (a CycleStore) List(ctx context.Context, limit, offset int) ([]store.Cycle,
 func (a CycleStore) Get(ctx context.Context, id string) (store.Cycle, error) {
 	return a.S.GetCycle(ctx, id)
 }
+func (a CycleStore) Count(ctx context.Context) (int, error) {
+	return a.S.CountCycles(ctx)
+}
+func (a CycleStore) ListWithDegraded(ctx context.Context, limit, offset int) ([]store.DigestListEntry, error) {
+	return a.S.ListCyclesWithDegraded(ctx, limit, offset)
+}
 
 // DigestStore adapts *Store to store.DigestRepo.
 type DigestStore struct{ S *Store }

@@ -154,6 +154,7 @@ type DigestListEntry struct {
 
 // OpEvent is one entry in the operational audit log.
 type OpEvent struct {
+	ID         int64
 	OccurredAt time.Time
 	Level      string // "info" | "warn" | "error"
 	Kind       string // e.g. "cycle.start", "telegram.send.failed"
@@ -220,6 +221,8 @@ type CycleRepo interface {
 	LastSuccessfulWindowEnd(ctx context.Context) (time.Time, bool, error)
 	List(ctx context.Context, limit, offset int) ([]Cycle, error)
 	Get(ctx context.Context, id string) (Cycle, error)
+	Count(ctx context.Context) (int, error)
+	ListWithDegraded(ctx context.Context, limit, offset int) ([]DigestListEntry, error)
 }
 
 // DigestRepo persists delivered digests and their items.

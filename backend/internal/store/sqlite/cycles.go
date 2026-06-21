@@ -96,6 +96,47 @@ func (s *Store) ListCycles(ctx context.Context, limit, offset int) ([]store.Cycl
 	return out, nil
 }
 
+// cycleWithDegradedRow augments cycleRow with the digest's degraded flag.
+type cycleWithDegradedRow struct {
+	cycleRow
+	Degraded sql.NullInt64 `db:"degraded"`
+}
+
+// CountCycles returns the total number of cycle rows.
+func (s *Store) CountCycles(ctx context.Context) (int, error) {
+	var n int
+	if err := s.db.GetContext(ctx, &n, `SELECT COUNT(*) FROM cycles`); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
+// ListCyclesWithDegraded returns cycles left-joined with their digest's
+// degraded flag, newest-first. Used by the history list endpoint.
+func (s *Store) ListCyclesWithDegraded(ctx context.Context, limit, offset int) ([]store.DigestListEntry, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	q := `SELECT c.id, c.window_start, c.window_end, c.status, c.input_msg_count,
+		c.output_items, c.error, c.started_at, c.finished_at, d.degraded
+		FROM cycles c
+		LEFT JOIN digests d ON d.cycle_id = c.id
+		ORDER BY c.window_end DESC LIMIT ? OFFSET ?`
+	var rows []cycleWithDegradedRow
+	if err := s.db.SelectContext(ctx, &rows, q, limit, offset); err != nil {
+		return nil, err
+	}
+	out := make([]store.DigestListEntry, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, store.DigestListEntry{
+			Cycle:     r.cycleRow.toEntity(),
+			Degraded:  r.Degraded.Int64 == 1,
+			ItemCount: r.cycleRow.OutputItems,
+		})
+	}
+	return out, nil
+}
+
 // GetCycle returns one cycle by id.
 func (s *Store) GetCycle(ctx context.Context, id string) (store.Cycle, error) {
 	var r cycleRow
