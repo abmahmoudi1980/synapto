@@ -95,6 +95,7 @@ func run() error {
 		Cycles:          sqlite.CycleStore{S: st},
 		Digests:         sqlite.DigestStore{S: st},
 		Health:          sqlite.HealthStore{S: st},
+		Telegram:        tgClient,
 		SchedulerState:  schedulerStateFn,
 		TelegramReachable: func() bool { return true },
 		AIReachable:     func() bool { return cfg.AIProvider == "fake" },

@@ -100,17 +100,17 @@ description: "Task list for the Telegram News Digest Assistant feature"
 
 ### Tests for User Story 2
 
-- [ ] T029 [P] [US2] Admin API contract test for channels (200 list, 201 add happy path, 400 invalid handle, 409 duplicate, 404 not found) in `backend/internal/adminapi/channels_test.go`
+- [X] T029 [P] [US2] Admin API contract test for channels (200 list, 201 add happy path, 400 invalid handle, 409 duplicate, 404 not found) in `backend/internal/adminapi/channels_test.go`
 
 ### Implementation for User Story 2
 
-- [ ] T030 [P] [US2] Implement `telegram.Fetcher` in `backend/internal/telegram/fetcher.go` (uses `Client.GetChat` to validate on add, advances `channels.last_seen_msg_id` after each successful cycle, marks channels `inaccessible` on repeated failures)
-- [ ] T031 [P] [US2] Implement `telegram.Sender` (MarkdownV2 send with one retry on plain-text fallback, 250ms inter-message gap) in `backend/internal/telegram/sender.go`
-- [ ] T032 [P] [US2] Admin API handlers in `backend/internal/adminapi/channels.go` for `GET /api/channels`, `POST /api/channels`, `DELETE /api/channels/{id}` (depends on T029, T030)
-- [ ] T033 [P] [US2] Frontend typed API client in `frontend/src/lib/api.ts` with `listChannels`, `addChannel`, `removeChannel` methods
-- [ ] T034 [P] [US2] Frontend layout in `frontend/src/routes/+layout.svelte` (top nav: Overview, Channels, Categories, History, Settings) and Channels page in `frontend/src/routes/channels/+page.svelte`
-- [ ] T035 [P] [US2] Frontend `ChannelList` component in `frontend/src/lib/components/ChannelList.svelte` (table with handle, display name, last observed, status badge, remove button)
-- [ ] T036 [US2] Wire channel handlers in `main.go` and confirm Track A step A3 of `quickstart.md` passes (depends on T032, T034)
+- [X] T030 [P] [US2] Implement `telegram.Fetcher` in `backend/internal/telegram/fetcher.go` (uses `Client.GetChat` to validate on add, advances `channels.last_seen_msg_id` after each successful cycle, marks channels `inaccessible` on repeated failures)
+- [X] T031 [P] [US2] Implement `telegram.Sender` (MarkdownV2 send with one retry on plain-text fallback, 250ms inter-message gap) in `backend/internal/telegram/sender.go`
+- [X] T032 [P] [US2] Admin API handlers in `backend/internal/adminapi/channels.go` for `GET /api/channels`, `POST /api/channels`, `DELETE /api/channels/{id}` (depends on T029, T030)
+- [X] T033 [P] [US2] Frontend typed API client in `frontend/src/lib/api.ts` with `listChannels`, `addChannel`, `removeChannel` methods
+- [X] T034 [P] [US2] Frontend layout in `frontend/src/routes/+layout.svelte` (top nav: Overview, Channels, Categories, History, Settings) and Channels page in `frontend/src/routes/channels/+page.svelte`
+- [X] T035 [P] [US2] Frontend `ChannelList` component in `frontend/src/lib/components/ChannelList.svelte` (table with handle, display name, last observed, status badge, remove button)
+- [X] T036 [US2] Wire channel handlers in `main.go` and confirm Track A step A3 of `quickstart.md` passes (depends on T032, T034)
 
 **Checkpoint**: US1 + US2 are both fully functional and testable independently — Track A steps A3 and A7 of `quickstart.md` pass.
 
