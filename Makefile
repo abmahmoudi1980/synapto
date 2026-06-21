@@ -38,7 +38,7 @@ build-backend: copy-spa
 # copy-spa: stage the built SPA into the //go:embed directory before go build.
 # Keeps .gitkeep so the embed directive always has at least one file.
 copy-spa:
-	@rm -f $(BACKEND_DIR)/internal/adminapi/spa/*
+	@find $(BACKEND_DIR)/internal/adminapi/spa -mindepth 1 -name '.gitkeep' -prune -o -exec rm -rf {} +
 	@touch $(BACKEND_DIR)/internal/adminapi/spa/.gitkeep
 	@if [ -d $(FRONTEND_DIR)/build ]; then cp -r $(FRONTEND_DIR)/build/. $(BACKEND_DIR)/internal/adminapi/spa/; fi
 

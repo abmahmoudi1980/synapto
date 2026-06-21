@@ -1,3 +1,236 @@
+/* Synapto Admin — design system
+ * Style: Data-Dense Dashboard
+ * Tokens follow an 8px base unit. Colors are WCAG AA verified on white. */
+
 :root {
 	color-scheme: light;
+
+	/* Color tokens — Indigo primary, Emerald CTA, neutrals. */
+	--color-bg: #f8fafc;
+	--color-surface: #ffffff;
+	--color-surface-2: #f1f5f9;
+	--color-border: #e2e8f0;
+	--color-border-strong: #cbd5e1;
+
+	--color-text: #0f172a; /* slate-900 — body text, 4.5:1+ on white */
+	--color-text-muted: #475569; /* slate-600 — secondary text, 4.5:1+ on white */
+	--color-text-subtle: #64748b; /* slate-500 — meta */
+	--color-text-on-primary: #ffffff;
+
+	--color-primary: #6366f1; /* indigo-500 */
+	--color-primary-hover: #4f46e5; /* indigo-600 */
+	--color-primary-soft: #eef2ff; /* indigo-50 */
+	--color-primary-soft-text: #4338ca; /* indigo-700 */
+
+	--color-cta: #10b981; /* emerald-500 */
+	--color-cta-hover: #059669; /* emerald-600 */
+	--color-cta-soft: #ecfdf5;
+
+	--color-success: #16a34a;
+	--color-success-soft: #dcfce7;
+	--color-warning: #d97706;
+	--color-warning-soft: #fef3c7;
+	--color-danger: #dc2626;
+	--color-danger-soft: #fee2e2;
+	--color-info: #0284c7;
+	--color-info-soft: #e0f2fe;
+
+	/* Typography */
+	--font-sans: 'Fira Sans', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+	--font-mono: 'Fira Code', ui-monospace, 'SF Mono', 'Cascadia Mono', Consolas, monospace;
+
+	--text-xs: 0.75rem;
+	--text-sm: 0.8125rem;
+	--text-base: 0.9375rem;
+	--text-lg: 1.0625rem;
+	--text-xl: 1.25rem;
+	--text-2xl: 1.5rem;
+	--text-3xl: 1.875rem;
+
+	--leading-tight: 1.25;
+	--leading-snug: 1.4;
+	--leading-normal: 1.55;
+	--leading-relaxed: 1.7;
+
+	/* Spacing (8px base) */
+	--space-1: 0.25rem;
+	--space-2: 0.5rem;
+	--space-3: 0.75rem;
+	--space-4: 1rem;
+	--space-5: 1.25rem;
+	--space-6: 1.5rem;
+	--space-8: 2rem;
+	--space-10: 2.5rem;
+	--space-12: 3rem;
+
+	/* Radii */
+	--radius-sm: 4px;
+	--radius-md: 6px;
+	--radius-lg: 10px;
+	--radius-pill: 999px;
+
+	/* Shadows — soft, multi-layer */
+	--shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.04), 0 1px 1px rgba(15, 23, 42, 0.03);
+	--shadow-md: 0 2px 4px rgba(15, 23, 42, 0.05), 0 1px 2px rgba(15, 23, 42, 0.04);
+	--shadow-lg: 0 10px 15px -3px rgba(15, 23, 42, 0.08), 0 4px 6px -2px rgba(15, 23, 42, 0.05);
+
+	/* Motion */
+	--ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+	--duration-fast: 120ms;
+	--duration-base: 180ms;
+	--duration-slow: 260ms;
+
+	/* Focus ring — visible on all interactive elements */
+	--focus-ring: 0 0 0 3px rgba(99, 102, 241, 0.35);
+}
+
+/* Base resets & global typography */
+*,
+*::before,
+*::after {
+	box-sizing: border-box;
+}
+
+html {
+	-webkit-text-size-adjust: 100%;
+	-webkit-font-smoothing: antialiased;
+	-moz-osx-font-smoothing: grayscale;
+}
+
+body {
+	margin: 0;
+	font-family: var(--font-sans);
+	font-size: var(--text-base);
+	line-height: var(--leading-normal);
+	color: var(--color-text);
+	background: var(--color-bg);
+	font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+}
+
+h1,
+h2,
+h3,
+h4 {
+	font-weight: 600;
+	line-height: var(--leading-tight);
+	color: var(--color-text);
+	margin: 0 0 var(--space-3);
+	letter-spacing: -0.01em;
+}
+
+h1 {
+	font-size: var(--text-2xl);
+	letter-spacing: -0.02em;
+}
+h2 {
+	font-size: var(--text-xl);
+}
+h3 {
+	font-size: var(--text-lg);
+}
+
+p {
+	margin: 0 0 var(--space-3);
+}
+
+code,
+kbd,
+samp,
+pre {
+	font-family: var(--font-mono);
+	font-size: 0.9em;
+}
+
+a {
+	color: var(--color-primary);
+	text-decoration: none;
+	transition: color var(--duration-base) var(--ease-out);
+}
+a:hover {
+	color: var(--color-primary-hover);
+	text-decoration: underline;
+	text-underline-offset: 2px;
+}
+
+/* Default focus-visible — applied to any interactive element lacking its own. */
+:where(button, a, input, select, textarea, [tabindex]):focus-visible {
+	outline: none;
+	box-shadow: var(--focus-ring);
+	border-radius: var(--radius-sm);
+}
+
+/* Forms */
+input[type='text'],
+input[type='search'],
+input[type='number'],
+input[type='email'],
+select,
+textarea {
+	font-family: inherit;
+	font-size: var(--text-sm);
+	color: var(--color-text);
+	background: var(--color-surface);
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius-md);
+	padding: 0.5rem 0.75rem;
+	width: 100%;
+	transition:
+		border-color var(--duration-base) var(--ease-out),
+		box-shadow var(--duration-base) var(--ease-out);
+}
+input:hover,
+select:hover,
+textarea:hover {
+	border-color: var(--color-border-strong);
+}
+input:focus,
+select:focus,
+textarea:focus {
+	outline: none;
+	border-color: var(--color-primary);
+	box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.18);
+}
+
+button {
+	font-family: inherit;
+	cursor: pointer;
+}
+
+/* Reusable card surface */
+.surface {
+	background: var(--color-surface);
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius-lg);
+	box-shadow: var(--shadow-sm);
+}
+
+/* Skip-to-content link (a11y) */
+.skip-link {
+	position: absolute;
+	top: var(--space-2);
+	left: var(--space-2);
+	background: var(--color-primary);
+	color: var(--color-text-on-primary);
+	padding: 0.5rem 0.875rem;
+	border-radius: var(--radius-md);
+	font-size: var(--text-sm);
+	font-weight: 600;
+	transform: translateY(-200%);
+	transition: transform var(--duration-base) var(--ease-out);
+	z-index: 1000;
+}
+.skip-link:focus-visible {
+	transform: translateY(0);
+}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		animation-duration: 0.001ms !important;
+		animation-iteration-count: 1 !important;
+		transition-duration: 0.001ms !important;
+		scroll-behavior: auto !important;
+	}
 }
