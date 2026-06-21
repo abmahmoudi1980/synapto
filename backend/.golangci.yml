@@ -1,0 +1,47 @@
+# golangci-lint configuration for the synapto assistant backend.
+# Aligns with the plan's "Testing" + "Logging" sections: keep lints strict
+# but avoid noisy style police that don't catch real bugs.
+
+run:
+  timeout: 5m
+  go: "1.22"
+
+linters:
+  enable:
+    - gofmt
+    - goimports
+    - govet
+    - errcheck
+    - staticcheck
+    - ineffassign
+    - unused
+    - misspell
+    - revive
+    - gocritic
+    - bodyclose
+  disable-all: true
+
+linters-settings:
+  goimports:
+    local-prefixes: github.com/synapto/assistant
+  errcheck:
+    check-type-assertions: true
+  revive:
+    rules:
+      - name: exported
+        disabled: true # the package is internal; exported names don't need doc comments
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - performance
+    disabled-checks:
+      - hugeParam # struct-heavy code passes pointers deliberately
+
+issues:
+  exclude-rules:
+    # Test files may use fatals and unchecked errors for brevity.
+    - path: _test\.go
+      linters:
+        - errcheck
+  max-issues-per-linter: 0
+  max-same-issues: 0

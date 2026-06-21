@@ -32,13 +32,13 @@ description: "Task list for the Telegram News Digest Assistant feature"
 
 **Purpose**: Project initialization and basic structure for both the Go backend and the Svelte frontend.
 
-- [ ] T001 Create repository layout per plan.md: `backend/`, `frontend/`, `Makefile`, and `backend/migrations/` directories
-- [ ] T002 Initialize backend Go module in `backend/go.mod` with dependencies: `github.com/go-telegram-bot-api/telegram-bot-api/v5`, `github.com/go-chi/chi/v5`, `github.com/jmoiron/sqlx`, `modernc.org/sqlite`, `github.com/google/uuid`, `github.com/sashabaranov/go-openai`, `github.com/caarlos0/env/v10`, `github.com/stretchr/testify`
-- [ ] T003 [P] Initialize frontend SvelteKit project in `frontend/` with Svelte 4, SvelteKit 2, Vite 5, TypeScript, and `@sveltejs/adapter-static`
-- [ ] T004 [P] Configure Go linting in `backend/.golangci.yml` (gofmt, govet, errcheck, staticcheck) and add a `make lint-go` target to `Makefile`
-- [ ] T005 [P] Configure frontend linting/formatting in `frontend/.eslintrc.cjs`, `frontend/.prettierrc`, and add `make lint-fe` target to `Makefile`
-- [ ] T006 Add `Makefile` targets: `deps`, `build`, `run`, `test`, `lint`, `clean` (build target runs `npm run build` then `go build -o bin/assistant ./backend/cmd/assistant`)
-- [ ] T007 [P] Add empty initial migration file `backend/migrations/0001_init.sql` with a header comment block and a single `SELECT 1;` placeholder (real schema added in Phase 2)
+- [X] T001 Create repository layout per plan.md: `backend/`, `frontend/`, `Makefile`, and `backend/migrations/` directories
+- [X] T002 Initialize backend Go module in `backend/go.mod` with dependencies: `github.com/go-telegram-bot-api/telegram-bot-api/v5`, `github.com/go-chi/chi/v5`, `github.com/jmoiron/sqlx`, `modernc.org/sqlite`, `github.com/google/uuid`, `github.com/sashabaranov/go-openai`, `github.com/caarlos0/env/v10`, `github.com/stretchr/testify`
+- [X] T003 [P] Initialize frontend SvelteKit project in `frontend/` with Svelte 4, SvelteKit 2, Vite 5, TypeScript, and `@sveltejs/adapter-static`
+- [X] T004 [P] Configure Go linting in `backend/.golangci.yml` (gofmt, govet, errcheck, staticcheck) and add a `make lint-go` target to `Makefile`
+- [X] T005 [P] Configure frontend linting/formatting in `frontend/.eslintrc.cjs`, `frontend/.prettierrc`, and add `make lint-fe` target to `Makefile`
+- [X] T006 Add `Makefile` targets: `deps`, `build`, `run`, `test`, `lint`, `clean` (build target runs `npm run build` then `go build -o bin/assistant ./backend/cmd/assistant`)
+- [X] T007 [P] Add empty initial migration file `backend/migrations/0001_init.sql` with a header comment block and a single `SELECT 1;` placeholder (real schema added in Phase 2)
 
 ---
 
@@ -48,19 +48,19 @@ description: "Task list for the Telegram News Digest Assistant feature"
 
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete.
 
-- [ ] T008 Implement migration runner with `//go:embed` in `backend/internal/store/migrate.go` (lexical-order apply, `schema_migrations` table, error-on-failed-migration aborts startup)
-- [ ] T009 [P] Implement env-driven config loader in `backend/internal/config/config.go` with fields: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_SUBSCRIBER_CHAT`, `AI_PROVIDER`, `AI_BASE_URL`, `AI_MODEL`, `AI_API_KEY`, `AI_PER_CALL_TIMEOUT`, `AI_MAX_CONCURRENCY`, `DIGEST_INTERVAL`, `ADMIN_LISTEN_ADDR`, `DB_PATH` (defaults: `AI_PROVIDER=fake`, `DIGEST_INTERVAL=10m`, `ADMIN_LISTEN_ADDR=127.0.0.1:8080`, `DB_PATH=./assistant.db`)
-- [ ] T010 [P] Implement slog setup in `backend/internal/logging/logging.go` (JSON handler for prod, text handler for dev, log level from `LOG_LEVEL` env)
-- [ ] T011 Implement repository interfaces in `backend/internal/store/store.go`: `ChannelRepo`, `CategoryRepo`, `SettingsRepo`, `CycleRepo`, `DigestRepo`, `CursorRepo`, `HealthRepo` (signatures from `data-model.md`)
-- [ ] T012 Implement concrete SQLite repositories in `backend/internal/store/sqlite/` (one file per repo: `channels.go`, `categories.go`, `settings.go`, `cycles.go`, `digests.go`, `health.go`) using `modernc.org/sqlite` + `sqlx` and the schema from `data-model.md` `0001_init.sql`
-- [ ] T013 [P] Implement `ai.Summarizer` interface and error sentinels (`ErrUnavailable`, `ErrInvalidInput`, `ErrCategoryUnknown`) in `backend/internal/ai/summarizer.go`
-- [ ] T014 [P] Implement `ai.Fake` summarizer in `backend/internal/ai/fake.go` with rule-based matching and a default fallback (truncate text → `Uncategorized`, confidence 0.5)
-- [ ] T015 [P] Implement `telegram.Client` interface in `backend/internal/telegram/client.go` with `GetChat`, `GetUpdates`, `SendMessage` methods (uses `go-telegram-bot-api/v5` under the hood)
-- [ ] T016 [P] Implement `telegram.Fake` client in `backend/internal/telegram/fake.go` that reads seed messages from `.runtime/source-messages.yaml` and records sent messages to `.runtime/telegram-sent.jsonl`
-- [ ] T017 Implement chi HTTP server skeleton with JSON + slog middleware in `backend/internal/adminapi/server.go` (registers `/api/*` and `/` routes; serves SPA at `/`)
-- [ ] T018 Implement SPA embedding via `//go:embed` in `backend/internal/adminapi/static.go` (embeds `frontend/build/` output; falls back to a "UI not built" page when the embed dir is empty in dev)
-- [ ] T019 Implement health endpoint `GET /api/health` in `backend/internal/adminapi/health.go` returning `{status, version, uptime_seconds, last_successful_cycle_at, last_failure_at, last_failure_reason, scheduler_state, db_ok}` per `contracts/admin-api.md`
-- [ ] T020 Implement main.go entrypoint in `backend/cmd/assistant/main.go` that wires config → logging → store (with migration) → ai (provider chosen by config) → telegram (real or fake) → adminapi → scheduler (stub that ticks every `DIGEST_INTERVAL` and exits cleanly) → graceful shutdown on SIGINT/SIGTERM
+- [X] T008 Implement migration runner with `//go:embed` in `backend/internal/store/migrate.go` (lexical-order apply, `schema_migrations` table, error-on-failed-migration aborts startup)
+- [X] T009 [P] Implement env-driven config loader in `backend/internal/config/config.go` with fields: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_SUBSCRIBER_CHAT`, `AI_PROVIDER`, `AI_BASE_URL`, `AI_MODEL`, `AI_API_KEY`, `AI_PER_CALL_TIMEOUT`, `AI_MAX_CONCURRENCY`, `DIGEST_INTERVAL`, `ADMIN_LISTEN_ADDR`, `DB_PATH` (defaults: `AI_PROVIDER=fake`, `DIGEST_INTERVAL=10m`, `ADMIN_LISTEN_ADDR=127.0.0.1:8080`, `DB_PATH=./assistant.db`)
+- [X] T010 [P] Implement slog setup in `backend/internal/logging/logging.go` (JSON handler for prod, text handler for dev, log level from `LOG_LEVEL` env)
+- [X] T011 Implement repository interfaces in `backend/internal/store/store.go`: `ChannelRepo`, `CategoryRepo`, `SettingsRepo`, `CycleRepo`, `DigestRepo`, `CursorRepo`, `HealthRepo` (signatures from `data-model.md`)
+- [X] T012 Implement concrete SQLite repositories in `backend/internal/store/sqlite/` (one file per repo: `channels.go`, `categories.go`, `settings.go`, `cycles.go`, `digests.go`, `health.go`) using `modernc.org/sqlite` + `sqlx` and the schema from `data-model.md` `0001_init.sql`
+- [X] T013 [P] Implement `ai.Summarizer` interface and error sentinels (`ErrUnavailable`, `ErrInvalidInput`, `ErrCategoryUnknown`) in `backend/internal/ai/summarizer.go`
+- [X] T014 [P] Implement `ai.Fake` summarizer in `backend/internal/ai/fake.go` with rule-based matching and a default fallback (truncate text → `Uncategorized`, confidence 0.5)
+- [X] T015 [P] Implement `telegram.Client` interface in `backend/internal/telegram/client.go` with `GetChat`, `GetUpdates`, `SendMessage` methods (uses `go-telegram-bot-api/v5` under the hood)
+- [X] T016 [P] Implement `telegram.Fake` client in `backend/internal/telegram/fake.go` that reads seed messages from `.runtime/source-messages.yaml` and records sent messages to `.runtime/telegram-sent.jsonl`
+- [X] T017 Implement chi HTTP server skeleton with JSON + slog middleware in `backend/internal/adminapi/server.go` (registers `/api/*` and `/` routes; serves SPA at `/`)
+- [X] T018 Implement SPA embedding via `//go:embed` in `backend/internal/adminapi/static.go` (embeds `frontend/build/` output; falls back to a "UI not built" page when the embed dir is empty in dev)
+- [X] T019 Implement health endpoint `GET /api/health` in `backend/internal/adminapi/health.go` returning `{status, version, uptime_seconds, last_successful_cycle_at, last_failure_at, last_failure_reason, scheduler_state, db_ok}` per `contracts/admin-api.md`
+- [X] T020 Implement main.go entrypoint in `backend/cmd/assistant/main.go` that wires config → logging → store (with migration) → ai (provider chosen by config) → telegram (real or fake) → adminapi → scheduler (stub that ticks every `DIGEST_INTERVAL` and exits cleanly) → graceful shutdown on SIGINT/SIGTERM
 
 **Checkpoint**: Foundation ready — `make build && ./bin/assistant` boots, `curl /api/health` returns `ok` with `db_ok: true`, and the scheduler tick is observable in logs.
 
@@ -76,17 +76,17 @@ description: "Task list for the Telegram News Digest Assistant feature"
 
 > **NOTE**: Write these tests FIRST, ensure they FAIL before implementation.
 
-- [ ] T021 [P] [US1] Golden-file test for `digest.Render` (MarkdownV2 escaping, header, category grouping, footer, single-message and split-message cases) in `backend/tests/render_test.go`
-- [ ] T022 [P] [US1] Table-driven test for `digest.Dedup` (per-cycle dedup, cross-channel dedup, media-only signature, ordering) in `backend/tests/dedup_test.go`
-- [ ] T023 [P] [US1] End-to-end cycle test with fake Telegram + fake AI in `backend/tests/digest_cycle_test.go` (one channel, three messages → exactly one digest row, three items, one send, cursor advanced)
+- [X] T021 [P] [US1] Golden-file test for `digest.Render` (MarkdownV2 escaping, header, category grouping, footer, single-message and split-message cases) in `backend/tests/render_test.go`
+- [X] T022 [P] [US1] Table-driven test for `digest.Dedup` (per-cycle dedup, cross-channel dedup, media-only signature, ordering) in `backend/tests/dedup_test.go`
+- [X] T023 [P] [US1] End-to-end cycle test with fake Telegram + fake AI in `backend/tests/digest_cycle_test.go` (one channel, three messages → exactly one digest row, three items, one send, cursor advanced)
 
 ### Implementation for User Story 1
 
-- [ ] T024 [US1] Implement `digest.Dedup` (per-cycle dedup keyed on `sha256(normalize(text))` and on a media signature for media-only items) in `backend/internal/digest/dedup.go` (depends on T021, T022, T023)
-- [ ] T025 [US1] Implement `digest.Render` (MarkdownV2 escaping, header, category grouping, footer, splitting with 250ms gap, degraded-mode markers) in `backend/internal/digest/render.go` per `contracts/telegram-render.md`
-- [ ] T026 [US1] Implement `digest.Cycle` (fetch → dedup → summarize-with-budget → categorize → render → send → record `cycles` and `digests` rows) in `backend/internal/digest/cycle.go`
-- [ ] T027 [US1] Implement `digest.Scheduler` (mutex-guarded ticker, reads `LastSuccessfulWindowEnd` on startup for restart safety, never overlaps a running cycle) in `backend/internal/digest/scheduler.go`
-- [ ] T028 [US1] Wire scheduler into `main.go` in `backend/cmd/assistant/main.go` (pass `Cycle` + `SettingsRepo`; replace the Phase-2 stub ticker with a real `Scheduler`)
+- [X] T024 [US1] Implement `digest.Dedup` (per-cycle dedup keyed on `sha256(normalize(text))` and on a media signature for media-only items) in `backend/internal/digest/dedup.go` (depends on T021, T022, T023)
+- [X] T025 [US1] Implement `digest.Render` (MarkdownV2 escaping, header, category grouping, footer, splitting with 250ms gap, degraded-mode markers) in `backend/internal/digest/render.go` per `contracts/telegram-render.md`
+- [X] T026 [US1] Implement `digest.Cycle` (fetch → dedup → summarize-with-budget → categorize → render → send → record `cycles` and `digests` rows) in `backend/internal/digest/cycle.go`
+- [X] T027 [US1] Implement `digest.Scheduler` (mutex-guarded ticker, reads `LastSuccessfulWindowEnd` on startup for restart safety, never overlaps a running cycle) in `backend/internal/digest/scheduler.go`
+- [X] T028 [US1] Wire scheduler into `main.go` in `backend/cmd/assistant/main.go` (pass `Cycle` + `SettingsRepo`; replace the Phase-2 stub ticker with a real `Scheduler`)
 
 **Checkpoint**: User Story 1 is fully functional — Track A of `quickstart.md` (steps A1–A8) passes end-to-end, and the four acceptance scenarios in spec.md US1 hold.
 

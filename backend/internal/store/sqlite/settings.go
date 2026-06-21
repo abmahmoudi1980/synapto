@@ -1,0 +1,79 @@
+package sqlite
+
+import (
+	"context"
+	"errors"
+	"time"
+
+	"github.com/synapto/assistant/internal/store"
+)
+
+type settingsRow struct {
+	ID                      string `db:"id"`
+	DigestIntervalSeconds   int    `db:"digest_interval_seconds"`
+	TelegramBotTokenRef     string `db:"telegram_bot_token_ref"`
+	TelegramSubscriberChat  int64  `db:"telegram_subscriber_chat"`
+	AIProvider              string `db:"ai_provider"`
+	AIModel                 string `db:"ai_model"`
+	AIAPIKeyRef             string `db:"ai_api_key_ref"`
+	AIBaseURL               string `db:"ai_base_url"`
+	UncategorizedLabel      string `db:"uncategorized_label"`
+	UpdatedAt               string `db:"updated_at"`
+}
+
+func (r settingsRow) toEntity() store.Settings {
+	return store.Settings{
+		DigestIntervalSeconds:  r.DigestIntervalSeconds,
+		TelegramBotTokenRef:    r.TelegramBotTokenRef,
+		TelegramSubscriberChat: r.TelegramSubscriberChat,
+		AIProvider:             r.AIProvider,
+		AIModel:                r.AIModel,
+		AIAPIKeyRef:            r.AIAPIKeyRef,
+		AIBaseURL:              r.AIBaseURL,
+		UncategorizedLabel:     r.UncategorizedLabel,
+		UpdatedAt:              parseTimeStr(r.UpdatedAt),
+	}
+}
+
+// GetSettings returns the singleton settings row.
+func (s *Store) GetSettings(ctx context.Context) (store.Settings, error) {
+	var r settingsRow
+	if err := s.db.GetContext(ctx, &r, `SELECT * FROM settings WHERE id = 'singleton'`); err != nil {
+		return store.Settings{}, err
+	}
+	return r.toEntity(), nil
+}
+
+// UpdateSettings applies a partial update to the settings row.
+func (s *Store) UpdateSettings(ctx context.Context, u store.SettingsUpdate) (store.Settings, error) {
+	cur, err := s.GetSettings(ctx)
+	if err != nil {
+		return store.Settings{}, err
+	}
+	if u.DigestIntervalSeconds != nil {
+		v := *u.DigestIntervalSeconds
+		if v < 60 || v > 86400 {
+			return store.Settings{}, store.ErrInvalidInterval
+		}
+		cur.DigestIntervalSeconds = v
+	}
+	if u.TelegramSubscriberChat != nil {
+		cur.TelegramSubscriberChat = *u.TelegramSubscriberChat
+	}
+	if u.UncategorizedLabel != nil {
+		v := *u.UncategorizedLabel
+		if v == "" {
+			return store.Settings{}, errors.New("uncategorized_label must not be empty")
+		}
+		cur.UncategorizedLabel = v
+	}
+	_, err = s.db.ExecContext(ctx, `UPDATE settings SET
+		digest_interval_seconds = ?, telegram_subscriber_chat = ?, uncategorized_label = ?, updated_at = ?
+		WHERE id = 'singleton'`,
+		cur.DigestIntervalSeconds, cur.TelegramSubscriberChat, cur.UncategorizedLabel, nowISO())
+	if err != nil {
+		return store.Settings{}, err
+	}
+	cur.UpdatedAt = time.Now().UTC()
+	return cur, nil
+}
