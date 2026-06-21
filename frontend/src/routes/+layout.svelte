@@ -15,6 +15,7 @@
 <script lang="ts">
 	import '../app.css';
 	import { page } from '$app/stores';
+	import { goto } from '$app/navigation';
 	import Icon from '$lib/components/Icon.svelte';
 	import StatusBadge from '$lib/components/StatusBadge.svelte';
 	import { onMount } from 'svelte';
@@ -36,20 +37,56 @@
 
 	let health: Health | null = null;
 	let healthError = '';
+	let authRequired = false;
 
 	$: currentPath = $page.url.pathname;
+	$: isLoginRoute = currentPath === '/login';
 	$: isActive = (href: string) =>
 		href === '/'
 			? currentPath === '/'
 			: currentPath === href || currentPath.startsWith(href + '/');
 
 	onMount(async () => {
+		// Auth gate. If auth is required and we're not on the login
+		// page, probe /api/auth/status; if unauthenticated, redirect
+		// to /login (which itself probes status and bounces back
+		// here on success).
+		try {
+			const status = await api.getAuthStatus();
+			authRequired = status.auth_required;
+			if (status.auth_required && !status.authenticated && !isLoginRoute) {
+				await goto('/login');
+				return;
+			}
+			if (isLoginRoute && (!status.auth_required || status.authenticated)) {
+				await goto('/');
+				return;
+			}
+		} catch {
+			// Status check failed; if we're not on /login, route there
+			// so the user sees a clear error.
+			if (!isLoginRoute) {
+				await goto('/login');
+				return;
+			}
+		}
+
+		// Health snapshot for the sidebar service card.
 		try {
 			health = await api.getHealth();
 		} catch (e) {
 			healthError = (e as Error).message;
 		}
 	});
+
+	async function handleLogout() {
+		try {
+			await api.logout();
+		} catch {
+			// ignore — we redirect regardless
+		}
+		await goto('/login');
+	}
 
 	function statusKind(h: Health | null): 'ok' | 'unreachable' | 'warning' {
 		if (!h) return 'unreachable';
@@ -66,66 +103,81 @@
 
 <a href="#main" class="skip-link">Skip to content</a>
 
-<div class="layout">
-	<aside class="sidebar" aria-label="Primary navigation">
-		<div class="brand">
-			<span class="brand-mark" aria-hidden="true">
-				<Icon name="logo" size={22} strokeWidth={1.75} />
-			</span>
-			<div class="brand-text">
-				<span class="brand-name">Synapto</span>
-				<span class="brand-sub">Admin Panel</span>
+{#if isLoginRoute}
+	<slot />
+{:else}
+	<div class="layout">
+		<aside class="sidebar" aria-label="Primary navigation">
+			<div class="brand">
+				<span class="brand-mark" aria-hidden="true">
+					<Icon name="logo" size={22} strokeWidth={1.75} />
+				</span>
+				<div class="brand-text">
+					<span class="brand-name">Synapto</span>
+					<span class="brand-sub">Admin Panel</span>
+				</div>
+				{#if authRequired}
+					<button
+						type="button"
+						class="logout-btn"
+						on:click={handleLogout}
+						title="Sign out"
+						aria-label="Sign out"
+					>
+						<Icon name="arrow-left" size={14} />
+					</button>
+				{/if}
 			</div>
-		</div>
 
-		<nav class="nav" aria-label="Sections">
-			{#each nav as item (item.href)}
-				<a
-					href={item.href}
-					class="nav-item"
-					class:active={isActive(item.href)}
-					aria-current={isActive(item.href) ? 'page' : undefined}
-				>
-					<span class="nav-icon" aria-hidden="true">
-						<Icon name={item.icon} size={18} />
-					</span>
-					<span class="nav-label">{item.label}</span>
-				</a>
-			{/each}
-		</nav>
+			<nav class="nav" aria-label="Sections">
+				{#each nav as item (item.href)}
+					<a
+						href={item.href}
+						class="nav-item"
+						class:active={isActive(item.href)}
+						aria-current={isActive(item.href) ? 'page' : undefined}
+					>
+						<span class="nav-icon" aria-hidden="true">
+							<Icon name={item.icon} size={18} />
+						</span>
+						<span class="nav-label">{item.label}</span>
+					</a>
+				{/each}
+			</nav>
 
-		<div class="health-card surface">
-			<div class="health-head">
-				<span class="health-title">Service</span>
-				<StatusBadge kind={statusKind(health)} label={statusLabel(health)} />
+			<div class="health-card surface">
+				<div class="health-head">
+					<span class="health-title">Service</span>
+					<StatusBadge kind={statusKind(health)} label={statusLabel(health)} />
+				</div>
+				{#if health}
+					<dl class="health-grid">
+						<div>
+							<dt>Version</dt>
+							<dd>{health.version}</dd>
+						</div>
+						<div>
+							<dt>Uptime</dt>
+							<dd>{formatUptime(health.uptime_seconds)}</dd>
+						</div>
+						<div>
+							<dt>Scheduler</dt>
+							<dd>{health.scheduler_state}</dd>
+						</div>
+					</dl>
+				{:else if healthError}
+					<p class="health-error">{healthError}</p>
+				{:else}
+					<p class="health-loading">Connecting…</p>
+				{/if}
 			</div>
-			{#if health}
-				<dl class="health-grid">
-					<div>
-						<dt>Version</dt>
-						<dd>{health.version}</dd>
-					</div>
-					<div>
-						<dt>Uptime</dt>
-						<dd>{formatUptime(health.uptime_seconds)}</dd>
-					</div>
-					<div>
-						<dt>Scheduler</dt>
-						<dd>{health.scheduler_state}</dd>
-					</div>
-				</dl>
-			{:else if healthError}
-				<p class="health-error">{healthError}</p>
-			{:else}
-				<p class="health-loading">Connecting…</p>
-			{/if}
-		</div>
-	</aside>
+		</aside>
 
-	<main id="main" class="content" tabindex="-1">
-		<slot />
-	</main>
-</div>
+		<main id="main" class="content" tabindex="-1">
+			<slot />
+		</main>
+	</div>
+{/if}
 
 <style>
 	.layout {
@@ -178,6 +230,27 @@
 		color: var(--color-text-subtle);
 		letter-spacing: 0.04em;
 		text-transform: uppercase;
+	}
+
+	.logout-btn {
+		margin-left: auto;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 28px;
+		height: 28px;
+		background: transparent;
+		border: 1px solid var(--color-border);
+		border-radius: var(--radius-sm);
+		color: var(--color-text-muted);
+		cursor: pointer;
+		transition:
+			background var(--duration-base) var(--ease-out),
+			color var(--duration-base) var(--ease-out);
+	}
+	.logout-btn:hover {
+		background: var(--color-surface-2);
+		color: var(--color-text);
 	}
 
 	.nav {

@@ -21,14 +21,14 @@ type CycleRunner interface {
 // goroutine to call Run; the scheduler guards against overlapping cycles
 // with a mutex + atomic state flag.
 type Scheduler struct {
-	cycle      CycleRunner
-	interval   time.Duration
-	log        *slog.Logger
-	cycleRepo  store.CycleRepo
+	cycle     CycleRunner
+	interval  time.Duration
+	log       *slog.Logger
+	cycleRepo store.CycleRepo
 
-	mu         sync.Mutex
-	running    atomic.Bool
-	stateVal   atomic.Value
+	mu            sync.Mutex
+	running       atomic.Bool
+	stateVal      atomic.Value
 	skipFirstWait bool // test-only; see SetFirstTickDelay
 }
 
@@ -65,6 +65,24 @@ func (s *Scheduler) State() string {
 		return v
 	}
 	return "idle"
+}
+
+// WaitIdle blocks until no cycle is currently running, or until ctx
+// is canceled. Used by graceful shutdown to let the in-flight cycle
+// finish before the process exits.
+func (s *Scheduler) WaitIdle(ctx context.Context) error {
+	tick := time.NewTicker(100 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		if !s.running.Load() {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-tick.C:
+		}
+	}
 }
 
 // SetFirstTickDelay lets tests skip the startup wait so the first fire

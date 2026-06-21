@@ -18,12 +18,12 @@ type ChannelInfo struct {
 
 // Post is a single message observed in a channel.
 type Post struct {
-	ChannelID  int64
-	MessageID  int64
-	Text       string
-	MediaKind  string // "text" | "image" | "video" | "voice" | "other"
-	Captions   []string
-	SentAt     time.Time
+	ChannelID int64
+	MessageID int64
+	Text      string
+	MediaKind string // "text" | "image" | "video" | "voice" | "other"
+	Captions  []string
+	SentAt    time.Time
 }
 
 // SendResult is the outcome of a SendMessage call.

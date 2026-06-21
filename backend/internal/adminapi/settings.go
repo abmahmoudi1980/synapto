@@ -15,17 +15,17 @@ import (
 
 // settingsJSON is the on-the-wire shape for GET/PATCH /api/settings.
 type settingsJSON struct {
-	DigestIntervalSeconds   int    `json:"digest_interval_seconds"`
-	TelegramBotTokenRef     string `json:"telegram_bot_token_ref"`
-	TelegramSubscriberChat  int64  `json:"telegram_subscriber_chat"`
-	TelegramBotReachable    *bool  `json:"telegram_bot_reachable"`
-	AIProvider              string `json:"ai_provider"`
-	AIModel                 string `json:"ai_model"`
-	AIBaseURL               string `json:"ai_base_url"`
-	AIAPIKeyRef             string `json:"ai_api_key_ref"`
-	AIReachable             *bool  `json:"ai_reachable"`
-	UncategorizedLabel      string `json:"uncategorized_label"`
-	UpdatedAt               string `json:"updated_at"`
+	DigestIntervalSeconds  int    `json:"digest_interval_seconds"`
+	TelegramBotTokenRef    string `json:"telegram_bot_token_ref"`
+	TelegramSubscriberChat int64  `json:"telegram_subscriber_chat"`
+	TelegramBotReachable   *bool  `json:"telegram_bot_reachable"`
+	AIProvider             string `json:"ai_provider"`
+	AIModel                string `json:"ai_model"`
+	AIBaseURL              string `json:"ai_base_url"`
+	AIAPIKeyRef            string `json:"ai_api_key_ref"`
+	AIReachable            *bool  `json:"ai_reachable"`
+	UncategorizedLabel     string `json:"uncategorized_label"`
+	UpdatedAt              string `json:"updated_at"`
 }
 
 func settingsToJSON(s *Server, st store.Settings) settingsJSON {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strconv"
 	"sync"
 	"time"
 
@@ -82,6 +83,7 @@ func (c *Cycle) Run(ctx context.Context, windowStart, windowEnd time.Time) (stri
 				OccurredAt: time.Now().UTC(), Level: "warn", Kind: "channel.fetch.failed",
 				CycleID: cycleID, Message: "fetch failed for " + ch.Handle + ": " + err.Error(),
 			})
+			c.RecordChannelEvent(ctx, "channel.inaccessible", ch.Handle, err.Error())
 			continue
 		}
 		if len(posts) > 0 {
@@ -191,10 +193,14 @@ func (c *Cycle) Run(ctx context.Context, windowStart, windowEnd time.Time) (stri
 			if err != nil {
 				log.Warn("send failed", "part", i, "err", err)
 				sendStatus = store.SendFailed
+				c.RecordTelegramEvent(ctx, "telegram.send.failed",
+					"part "+strconv.Itoa(i)+" to chat "+strconv.FormatInt(c.deps.SubscriberChatID, 10)+": "+err.Error())
 				break
 			}
 			if res.Blocked {
 				sendStatus = store.SendBlocked
+				c.RecordTelegramEvent(ctx, "telegram.send.blocked",
+					"subscriber "+strconv.FormatInt(c.deps.SubscriberChatID, 10)+" blocked the bot")
 				break
 			}
 			if i == 0 {
@@ -375,7 +381,67 @@ func (c *Cycle) summarizeBatch(ctx context.Context, items []Item, categories map
 	return out, degraded
 }
 
-// finishCycle is a thin wrapper around CycleRepo.Finish.
+// finishCycle is a thin wrapper around CycleRepo.Finish that also
+// records a terminal op_event (cycle.success, cycle.degraded, or
+// cycle.failed) per contracts/admin-api.md.
 func (c *Cycle) finishCycle(ctx context.Context, id string, status store.CycleStatus, inputCount, outputItems int, errMsg string) error {
-	return c.deps.Cycles.Finish(ctx, id, status, inputCount, outputItems, errMsg)
+	if err := c.deps.Cycles.Finish(ctx, id, status, inputCount, outputItems, errMsg); err != nil {
+		return err
+	}
+	kind := "cycle.success"
+	level := "info"
+	msg := "cycle " + id + " succeeded with " + strconv.Itoa(outputItems) + " items"
+	switch status {
+	case store.CycleDegraded:
+		kind = "cycle.degraded"
+		msg = "cycle " + id + " delivered degraded with " + strconv.Itoa(outputItems) + " items"
+	case store.CycleFailed:
+		kind = "cycle.failed"
+		level = "error"
+		msg = "cycle " + id + " failed: " + errMsg
+	case store.CycleSkippedNoItems:
+		kind = "cycle.skipped_no_items"
+		msg = "cycle " + id + " skipped: no new items"
+	}
+	_ = c.deps.Health.RecordEvent(ctx, store.OpEvent{
+		OccurredAt: time.Now().UTC(),
+		Level:      level,
+		Kind:       kind,
+		CycleID:    id,
+		Message:    msg,
+	})
+	return nil
 }
+
+// RecordTelegramEvent emits a telegram.* op_event for the audit log.
+// Called from the cycle's send path; exported so future tests / hooks
+// can fire the same kind.
+func (c *Cycle) RecordTelegramEvent(ctx context.Context, kind, message string) {
+	level := "warn"
+	if kind == "telegram.send.blocked" {
+		level = "error"
+	}
+	_ = c.deps.Health.RecordEvent(ctx, store.OpEvent{
+		OccurredAt: time.Now().UTC(),
+		Level:      level,
+		Kind:       kind,
+		Message:    message,
+	})
+}
+
+// RecordChannelEvent emits a channel.* op_event for the audit log.
+func (c *Cycle) RecordChannelEvent(ctx context.Context, kind, handle, message string) {
+	_ = c.deps.Health.RecordEvent(ctx, store.OpEvent{
+		OccurredAt: time.Now().UTC(),
+		Level:      "warn",
+		Kind:       kind,
+		Message:    handle + ": " + message,
+	})
+}
+
+// itoa is a small allocation-free integer formatter used in event
+// messages. We use strconv for simplicity now that it's already
+// imported by sibling files.
+
+// itoa64 is the int64 counterpart, kept for API symmetry.
+var _ = strconv.FormatInt

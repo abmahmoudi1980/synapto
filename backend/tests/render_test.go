@@ -11,8 +11,8 @@ import (
 
 func TestRender_SingleMessageTwoCategories(t *testing.T) {
 	in := digest.RenderInput{
-		WindowEnd:    time.Date(2026, 6, 21, 7, 20, 0, 0, time.UTC),
-		CycleID:      "8a3f1c20-1234-5678-9abc-def012345678",
+		WindowEnd:     time.Date(2026, 6, 21, 7, 20, 0, 0, time.UTC),
+		CycleID:       "8a3f1c20-1234-5678-9abc-def012345678",
 		Uncategorized: "Uncategorized",
 		Items: []digest.RenderItem{
 			{Summary: "Telegram rolls out scheduled messages in channels", CategoryName: "Technology", CategoryOrder: 0, ChannelHandle: "telegram", MediaKind: ai.MediaText},
@@ -88,10 +88,10 @@ func TestRender_SplitAcrossMessages(t *testing.T) {
 		})
 	}
 	in := digest.RenderInput{
-		WindowEnd:    time.Now().UTC(),
-		CycleID:      "split123",
+		WindowEnd:     time.Now().UTC(),
+		CycleID:       "split123",
 		Uncategorized: "Uncategorized",
-		Items:        items,
+		Items:         items,
 	}
 	msgs := digest.Render(in)
 	if len(msgs) < 2 {
@@ -116,8 +116,8 @@ func TestRender_SplitAcrossMessages(t *testing.T) {
 
 func TestRender_NonTextItemPrefix(t *testing.T) {
 	in := digest.RenderInput{
-		WindowEnd:    time.Date(2026, 6, 21, 7, 20, 0, 0, time.UTC),
-		CycleID:      "media1234",
+		WindowEnd:     time.Date(2026, 6, 21, 7, 20, 0, 0, time.UTC),
+		CycleID:       "media1234",
 		Uncategorized: "Uncategorized",
 		Items: []digest.RenderItem{
 			{Summary: "Nice sunset", CategoryName: "Other", CategoryOrder: 0, ChannelHandle: "photo_chan", MediaKind: ai.MediaImage},
@@ -134,8 +134,8 @@ func TestRender_NonTextItemPrefix(t *testing.T) {
 
 func TestRender_UncategorizedFallback(t *testing.T) {
 	in := digest.RenderInput{
-		WindowEnd:    time.Date(2026, 6, 21, 7, 20, 0, 0, time.UTC),
-		CycleID:      "unc12345",
+		WindowEnd:     time.Date(2026, 6, 21, 7, 20, 0, 0, time.UTC),
+		CycleID:       "unc12345",
 		Uncategorized: "Other",
 		Items: []digest.RenderItem{
 			{Summary: "Some news", CategoryName: "", CategoryOrder: 0, ChannelHandle: "chan"},
@@ -150,8 +150,8 @@ func TestRender_UncategorizedFallback(t *testing.T) {
 func TestRender_SummaryTruncation(t *testing.T) {
 	longSummary := strings.Repeat("a", 300) // 300 chars, exceeds 280 limit
 	in := digest.RenderInput{
-		WindowEnd:    time.Date(2026, 6, 21, 7, 20, 0, 0, time.UTC),
-		CycleID:      "trunc1234",
+		WindowEnd:     time.Date(2026, 6, 21, 7, 20, 0, 0, time.UTC),
+		CycleID:       "trunc1234",
 		Uncategorized: "Uncategorized",
 		Items: []digest.RenderItem{
 			{Summary: longSummary, CategoryName: "Tech", ChannelHandle: "chan"},
@@ -166,8 +166,8 @@ func TestRender_SummaryTruncation(t *testing.T) {
 
 func TestRender_NewlinesInSummaryCollapsed(t *testing.T) {
 	in := digest.RenderInput{
-		WindowEnd:    time.Date(2026, 6, 21, 7, 20, 0, 0, time.UTC),
-		CycleID:      "nl123456",
+		WindowEnd:     time.Date(2026, 6, 21, 7, 20, 0, 0, time.UTC),
+		CycleID:       "nl123456",
 		Uncategorized: "Uncategorized",
 		Items: []digest.RenderItem{
 			{Summary: "Line one\nLine two\nLine three", CategoryName: "Tech", ChannelHandle: "chan"},

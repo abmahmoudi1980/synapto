@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -24,6 +25,8 @@ import (
 	"github.com/synapto/assistant/internal/store"
 	"github.com/synapto/assistant/internal/store/sqlite"
 	"github.com/synapto/assistant/internal/telegram"
+
+	openai "github.com/sashabaranov/go-openai"
 )
 
 // version is overridable at link time with -ldflags "-X main.version=...".
@@ -82,8 +85,12 @@ func run() error {
 		return fmt.Errorf("ensure default categories: %w", err)
 	}
 
-	// AI summarizer. Used by the digest cycle.
-	summarizer := newSummarizer(cfg, log)
+	// AI summarizer. Used by the digest cycle. Category names are
+	// pulled from the seeded defaults so the system prompt lists the
+	// real set.
+	categories := make([]string, 0, len(defaultCategoryNames))
+	categories = append(categories, defaultCategoryNames...)
+	summarizer := newSummarizer(cfg, log, categories)
 
 	// Telegram client.
 	tgClient, err := newTelegramClient(cfg, log)
@@ -118,6 +125,8 @@ func run() error {
 		TelegramReachable: func() bool { return true },
 		AIReachable:       func() bool { return cfg.AIProvider == "fake" },
 		StartedAt:         time.Now(),
+		AdminPassword:     cfg.AdminPassword,
+		Dev:               cfg.Dev,
 	})
 
 	// Digest cycle + scheduler. The cycle wires all repositories together;
@@ -157,7 +166,7 @@ func run() error {
 	// can change the digest interval from the admin panel without
 	// restarting the service.
 	settingsStore := sqlite.SettingsStore{S: st}
-	go watchSettings(ctx, settingsStore, scheduler, log, cfg.DigestInterval)
+	go watchSettings(ctx, settingsStore, sqlite.HealthStore{S: st}, scheduler, log, cfg.DigestInterval)
 
 	// Graceful shutdown on SIGINT/SIGTERM.
 	sigCh := make(chan os.Signal, 1)
@@ -170,12 +179,28 @@ func run() error {
 		return err
 	}
 
+	// Graceful shutdown sequence (T061):
+	//   1. Stop accepting new admin HTTP requests (30s budget).
+	//   2. Signal scheduler + watchers to stop via context cancel.
+	//   3. Wait for the in-flight cycle to finish (up to 30s).
+	//   4. Close the database handle.
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Error("admin http shutdown error", "err", err)
 	}
-	cancel()
+	cancel() // stop scheduler Run loop and settings watcher
+
+	// Wait for the currently-running cycle, with its own deadline so
+	// we don't block the process past the budget.
+	cycleCtx, cycleCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cycleCancel()
+	if err := scheduler.WaitIdle(cycleCtx); err != nil {
+		log.Warn("graceful shutdown: cycle did not finish in time", "err", err)
+	} else {
+		log.Info("graceful shutdown: cycle idle")
+	}
+
 	log.Info("assistant stopped")
 	return nil
 }
@@ -188,6 +213,7 @@ func run() error {
 func watchSettings(
 	ctx context.Context,
 	settings store.SettingsRepo,
+	health store.HealthRepo,
 	scheduler *digest.Scheduler,
 	log *slog.Logger,
 	initialInterval time.Duration,
@@ -212,23 +238,69 @@ func watchSettings(
 					"from", lastInterval, "to", d)
 				scheduler.SetInterval(d)
 				lastInterval = d
+				_ = health.RecordEvent(ctx, store.OpEvent{
+					OccurredAt: time.Now().UTC(),
+					Level:      "info",
+					Kind:       "settings.changed",
+					Message:    "digest_interval_seconds: " + d.String(),
+				})
 			}
 		}
 	}
 }
 
 // newSummarizer picks the AI implementation based on config.
-func newSummarizer(cfg config.Config, log *slog.Logger) ai.Summarizer {
+func newSummarizer(cfg config.Config, log *slog.Logger, categories []string) ai.Summarizer {
 	switch cfg.AIProvider {
 	case "openai":
-		// The real OpenAI implementation is added in Phase 8 (T058).
-		// For now, fall through to fake so the binary always boots.
-		log.Warn("ai provider openai not yet implemented; using fake", "ai_provider", cfg.AIProvider)
-		fallthrough
+		// Resolve the API key from the AI_API_KEY env var. The
+		// "env:AI_API_KEY" ref pattern in the settings table is
+		// preserved by the admin API; the runtime path resolves
+		// it directly from process env.
+		key, err := resolveSecret("env:AI_API_KEY")
+		if err != nil {
+			log.Warn("ai: cannot resolve api key ref, falling back to fake",
+				"ref", "env:AI_API_KEY", "err", err)
+			return ai.NewFake(nil, "Uncategorized")
+		}
+		clientCfg := openai.DefaultConfig(key)
+		if cfg.AIBaseURL != "" {
+			clientCfg.BaseURL = cfg.AIBaseURL
+		}
+		client := openai.NewClientWithConfig(clientCfg)
+		uncat := "Uncategorized"
+		log.Info("ai summarizer: openai", "model", cfg.AIModel, "base_url", cfg.AIBaseURL)
+		return ai.NewOpenAISummarizer(
+			client,
+			cfg.AIModel,
+			categories,
+			uncat,
+			cfg.AIPerCallTimeout,
+			log,
+		)
 	default:
 		log.Info("ai summarizer: fake", "rules", 0)
 		return ai.NewFake(nil, "Uncategorized")
 	}
+}
+
+// resolveSecret parses a "ref" string like "env:NAME" and returns the
+// resolved value. Returns an error if the ref is empty, has an
+// unsupported prefix, or the referenced env var is unset.
+func resolveSecret(ref string) (string, error) {
+	if ref == "" {
+		return "", errors.New("empty secret ref")
+	}
+	const envPrefix = "env:"
+	if !strings.HasPrefix(ref, envPrefix) {
+		return "", fmt.Errorf("unsupported secret ref %q (only %s* is supported in phase 1)", ref, envPrefix)
+	}
+	name := strings.TrimPrefix(ref, envPrefix)
+	v, ok := os.LookupEnv(name)
+	if !ok {
+		return "", fmt.Errorf("env var %q is not set", name)
+	}
+	return v, nil
 }
 
 // newTelegramClient picks the Telegram implementation based on config.

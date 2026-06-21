@@ -15,12 +15,12 @@ import (
 // and before summarization. The Dedup function consumes a slice of these
 // and returns the subset that survives dedup.
 type Item struct {
-	ChannelID    string
+	ChannelID     string
 	ChannelHandle string
-	SourceMsgID  int64
-	Text         string
-	MediaKind    ai.MediaKind
-	Captions     []string
+	SourceMsgID   int64
+	Text          string
+	MediaKind     ai.MediaKind
+	Captions      []string
 }
 
 // DedupKey is the dedup signature of an Item. Two items with the same
@@ -31,7 +31,7 @@ type DedupKey string
 //   - For text items (and media items with non-empty text), the key is
 //     sha256(normalize(text)).
 //   - For media-only items (empty text), the key is sha256("media:" + kind + ":"
-//     + normalized caption list), so two image posts with no caption share a
+//   - normalized caption list), so two image posts with no caption share a
 //     key only if their media kind and captions match.
 func (it Item) Key() DedupKey {
 	text := strings.TrimSpace(it.Text)

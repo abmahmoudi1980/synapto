@@ -106,6 +106,11 @@ export interface OpEvent {
 	context?: string;
 }
 
+export interface AuthStatus {
+	authenticated: boolean;
+	auth_required: boolean;
+}
+
 export interface ApiError {
 	error: {
 		code: string;
@@ -176,6 +181,14 @@ export const api = {
 
 	// Health
 	getHealth: (): Promise<Health> => request('GET', '/api/health'),
+
+	// Auth
+	getAuthStatus: (): Promise<AuthStatus> => request('GET', '/api/auth/status'),
+
+	login: (password: string): Promise<{ authenticated: boolean; expires_at?: string }> =>
+		request('POST', '/api/auth/login', { password }),
+
+	logout: (): Promise<{ authenticated: false }> => request('POST', '/api/auth/logout', {}),
 
 	// History
 	listCycles: (params?: {

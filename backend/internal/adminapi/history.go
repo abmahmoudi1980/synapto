@@ -14,15 +14,15 @@ import (
 
 // cycleListEntryJSON is the API shape for one row in the cycles list.
 type cycleListEntryJSON struct {
-	ID             string `json:"id"`
-	WindowStart    string `json:"window_start"`
-	WindowEnd      string `json:"window_end"`
-	Status         string `json:"status"`
-	InputMsgCount  int    `json:"input_msg_count"`
-	OutputItems    int    `json:"output_items"`
-	Degraded       bool   `json:"degraded"`
-	StartedAt      string `json:"started_at"`
-	FinishedAt     string `json:"finished_at"`
+	ID            string `json:"id"`
+	WindowStart   string `json:"window_start"`
+	WindowEnd     string `json:"window_end"`
+	Status        string `json:"status"`
+	InputMsgCount int    `json:"input_msg_count"`
+	OutputItems   int    `json:"output_items"`
+	Degraded      bool   `json:"degraded"`
+	StartedAt     string `json:"started_at"`
+	FinishedAt    string `json:"finished_at"`
 }
 
 func cycleListEntryToJSON(e store.DigestListEntry) cycleListEntryJSON {

@@ -22,8 +22,8 @@ type FakeSeedMessage struct {
 
 // FakeSeedChannel groups seed messages under a channel handle.
 type FakeSeedChannel struct {
-	Channel  string             `yaml:"channel" json:"channel"`
-	Messages []FakeSeedMessage  `yaml:"messages" json:"messages"`
+	Channel  string            `yaml:"channel" json:"channel"`
+	Messages []FakeSeedMessage `yaml:"messages" json:"messages"`
 }
 
 // FakeSeed is the top-level shape of the seed file. It supports both

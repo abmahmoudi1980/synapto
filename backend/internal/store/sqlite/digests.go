@@ -11,13 +11,13 @@ import (
 )
 
 type digestRow struct {
-	ID            string         `db:"id"`
-	CycleID       string         `db:"cycle_id"`
-	RenderedText  string         `db:"rendered_text"`
-	Degraded      int            `db:"degraded"`
-	TelegramMsgID sql.NullInt64  `db:"telegram_msg_id"`
-	SentAt        string         `db:"sent_at"`
-	SendStatus    string         `db:"send_status"`
+	ID            string        `db:"id"`
+	CycleID       string        `db:"cycle_id"`
+	RenderedText  string        `db:"rendered_text"`
+	Degraded      int           `db:"degraded"`
+	TelegramMsgID sql.NullInt64 `db:"telegram_msg_id"`
+	SentAt        string        `db:"sent_at"`
+	SendStatus    string        `db:"send_status"`
 }
 
 func (r digestRow) toEntity() store.Digest {
@@ -33,17 +33,17 @@ func (r digestRow) toEntity() store.Digest {
 }
 
 type digestItemRow struct {
-	ID          string         `db:"id"`
-	CycleID     string         `db:"cycle_id"`
-	ChannelID   string         `db:"channel_id"`
-	CategoryID  sql.NullString `db:"category_id"`
-	SourceMsgID int64          `db:"source_msg_id"`
-	DedupKey    string         `db:"dedup_key"`
-	RawText     string         `db:"raw_text"`
-	MediaKind   string         `db:"media_kind"`
-	Summary     string         `db:"summary"`
+	ID          string          `db:"id"`
+	CycleID     string          `db:"cycle_id"`
+	ChannelID   string          `db:"channel_id"`
+	CategoryID  sql.NullString  `db:"category_id"`
+	SourceMsgID int64           `db:"source_msg_id"`
+	DedupKey    string          `db:"dedup_key"`
+	RawText     string          `db:"raw_text"`
+	MediaKind   string          `db:"media_kind"`
+	Summary     string          `db:"summary"`
 	Confidence  sql.NullFloat64 `db:"confidence"`
-	Ordering    int            `db:"ordering"`
+	Ordering    int             `db:"ordering"`
 }
 
 func (r digestItemRow) toEntity() store.DigestItem {
@@ -135,11 +135,11 @@ func (s *Store) GetDigestByCycle(ctx context.Context, cycleID string) (store.Dig
 
 // ListRecentDigests returns the most recent digests joined with their cycle.
 type recentRow struct {
-	CycleID     string `db:"cycle_id"`
-	WindowEnd   string `db:"window_end"`
-	Status      string `db:"status"`
-	InputCount  int    `db:"input_msg_count"`
-	OutputItems int    `db:"output_items"`
+	CycleID     string         `db:"cycle_id"`
+	WindowEnd   string         `db:"window_end"`
+	Status      string         `db:"status"`
+	InputCount  int            `db:"input_msg_count"`
+	OutputItems int            `db:"output_items"`
 	DigestID    sql.NullString `db:"digest_id"`
 	Degraded    sql.NullInt64  `db:"degraded"`
 	SentAt      sql.NullString `db:"sent_at"`
@@ -171,8 +171,8 @@ func (s *Store) ListRecentDigests(ctx context.Context, limit int) ([]store.Diges
 				InputMsgCount: r.InputCount,
 				OutputItems:   r.OutputItems,
 			},
-			Degraded:   r.Degraded.Int64 == 1,
-			ItemCount:  r.OutputItems,
+			Degraded:  r.Degraded.Int64 == 1,
+			ItemCount: r.OutputItems,
 		}
 		if r.DigestID.Valid {
 			entry.DigestID = r.DigestID.String

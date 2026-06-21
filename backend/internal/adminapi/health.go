@@ -7,21 +7,21 @@ import (
 
 // healthResponse is the JSON shape for GET /api/health per contracts/admin-api.md.
 type healthResponse struct {
-	Status                  string   `json:"status"`
-	Version                 string   `json:"version"`
-	UptimeSeconds           int64    `json:"uptime_seconds"`
-	LastSuccessfulCycleAt   *string  `json:"last_successful_cycle_at"`
-	LastFailureAt           *string  `json:"last_failure_at"`
-	LastFailureReason       *string  `json:"last_failure_reason"`
-	SchedulerState          string   `json:"scheduler_state"`
-	DBOk                    bool     `json:"db_ok"`
-	ChannelStatuses         []chanSummary `json:"channel_statuses,omitempty"`
+	Status                string        `json:"status"`
+	Version               string        `json:"version"`
+	UptimeSeconds         int64         `json:"uptime_seconds"`
+	LastSuccessfulCycleAt *string       `json:"last_successful_cycle_at"`
+	LastFailureAt         *string       `json:"last_failure_at"`
+	LastFailureReason     *string       `json:"last_failure_reason"`
+	SchedulerState        string        `json:"scheduler_state"`
+	DBOk                  bool          `json:"db_ok"`
+	ChannelStatuses       []chanSummary `json:"channel_statuses,omitempty"`
 }
 
 type chanSummary struct {
-	Handle         string `json:"handle"`
-	DisplayName    string `json:"display_name"`
-	Status         string `json:"status"`
+	Handle         string  `json:"handle"`
+	DisplayName    string  `json:"display_name"`
+	Status         string  `json:"status"`
 	LastObservedAt *string `json:"last_observed_at"`
 	LastError      *string `json:"last_error"`
 }

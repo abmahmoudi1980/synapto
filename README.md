@@ -69,6 +69,12 @@ Other targets:
 | `make lint` | `golangci-lint` (or `go vet`) + frontend ESLint/Prettier |
 | `make fmt` | format Go + frontend in place |
 | `make clean` | remove `bin/`, `frontend/build`, test cache |
+| `make env-track-a` | write `.runtime/track-a.env` (no creds) |
+| `make env-track-b` | write `.runtime/track-b.env` (uses `TELEGRAM_BOT_TOKEN` + chat) |
+| `make env-track-c` | write `.runtime/track-c.env` (uses `TELEGRAM_*` + `AI_*`) |
+| `make run-track-a` | run Track A locally (fake Telegram + fake AI) |
+| `make run-track-b` | run Track B locally (real Telegram + fake AI) |
+| `make run-track-c` | run Track C locally (real Telegram + real AI) |
 
 ## Configuration
 
@@ -97,21 +103,16 @@ All config is read from environment variables (see [`backend/internal/config/con
 
 ### Pure-local run (no Telegram, no AI)
 
-```bash
-mkdir -p .runtime
-cat > .runtime/assistant.env <<'EOF'
-ASSISTANT_AI_PROVIDER=fake
-DIGEST_INTERVAL=10s
-ADMIN_LISTEN_ADDR=127.0.0.1:8080
-DB_PATH=./.runtime/assistant.db
-TELEGRAM_FAKE_OUT=./.runtime/telegram-sent.jsonl
-EOF
+The fastest path to a working service. The `run-track-a` target writes an env file with safe defaults and starts the binary:
 
-set -a; source .runtime/assistant.env; set +a
-./bin/assistant
+```bash
+make run-track-a
+# open http://127.0.0.1:8080/
 ```
 
-Open <http://127.0.0.1:8080/> for the admin panel. Add a channel, seed `.runtime/source-messages.yaml`, restart, and watch a cycle fire every 10 seconds.
+The first boot seeds the default category set (Politics, Technology, Business, Sports, World, Other) and the singleton settings row. The fake Telegram client reads from `.runtime/source-messages.yaml` and records sent digests to `.runtime/telegram-sent.jsonl`.
+
+Want to run a real Telegram bot (Track B) or a real OpenAI-compatible provider (Track C)? See the [quickstart](specs/001-telegram-news-assistant/quickstart.md) for full instructions, or just `make env-track-b` / `make env-track-c` to write the env files, export the required credentials, and `make run-track-b` / `make run-track-c`.
 
 ## Admin HTTP API
 
@@ -156,9 +157,9 @@ The [quickstart](specs/001-telegram-news-assistant/quickstart.md) describes thre
 
 ## Status & scope
 
-- **Implemented now:** the digest cycle, scheduler with restart safety, SQLite store, dedup, renderer with size-limit handling, admin HTTP API, embedded Svelte SPA, fake AI summarizer, fake Telegram client.
-- **Pluggable by design:** the AI summarizer (`ai.Summarizer`) and Telegram client (`telegram.Client`) are behind interfaces, so the provider/model and bot library can change without touching the cycle. The real OpenAI-compatible summarizer and the real Telegram Bot API client are wired as the non-fake paths.
-- **Out of scope for phase 1:** multi-subscriber, multi-bot, OCR/ASR for media-only posts, horizontal scaling, auth on the admin panel.
+- **Implemented now (v1.0):** the digest cycle, scheduler with restart safety and live interval reload, SQLite store, dedup, renderer with size-limit handling, admin HTTP API, embedded Svelte SPA, **real OpenAI-compatible summarizer** (`backend/internal/ai/openai.go`), **fake Telegram client** for local dev, **op_events audit log** (`cycle.start`, `cycle.success`, `cycle.degraded`, `cycle.failed`, `telegram.send.failed`, `telegram.send.blocked`, `channel.inaccessible`, `channel.banned`, `settings.changed`, etc.), **graceful shutdown** that lets the in-flight cycle finish, and a `tracks-a/b/c` validation matrix.
+- **Pluggable by design:** the AI summarizer (`ai.Summarizer`) and Telegram client (`telegram.Client`) are behind interfaces, so the provider/model and bot library can change without touching the cycle. The fake implementations stay for tests and Track A.
+- **Out of scope for v1:** multi-subscriber, multi-bot, OCR/ASR for media-only posts, horizontal scaling, **auth on the admin panel** (planned follow-up; bind to a non-public interface in the meantime).
 
 ## Spec & design docs
 

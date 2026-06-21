@@ -60,15 +60,15 @@ type Category struct {
 // Credential fields hold references (e.g. "env:TELEGRAM_BOT_TOKEN"), never
 // raw secrets.
 type Settings struct {
-	DigestIntervalSeconds int
-	TelegramBotTokenRef   string
+	DigestIntervalSeconds  int
+	TelegramBotTokenRef    string
 	TelegramSubscriberChat int64
-	AIProvider            string
-	AIModel               string
-	AIAPIKeyRef           string
-	AIBaseURL             string
-	UncategorizedLabel    string
-	UpdatedAt             time.Time
+	AIProvider             string
+	AIModel                string
+	AIAPIKeyRef            string
+	AIBaseURL              string
+	UncategorizedLabel     string
+	UpdatedAt              time.Time
 }
 
 // CycleStatus is the state of one scheduled digest execution.
@@ -128,28 +128,28 @@ const (
 
 // DigestItem is one summarized, categorized entry in a digest.
 type DigestItem struct {
-	ID           string
-	CycleID      string
-	ChannelID    string
-	CategoryID   string // empty when uncategorized
-	SourceMsgID  int64
-	DedupKey     string
-	RawText      string
-	MediaKind    MediaKind
-	Summary      string
-	Confidence   float64 // 0 when unknown
-	Ordering     int
+	ID          string
+	CycleID     string
+	ChannelID   string
+	CategoryID  string // empty when uncategorized
+	SourceMsgID int64
+	DedupKey    string
+	RawText     string
+	MediaKind   MediaKind
+	Summary     string
+	Confidence  float64 // 0 when unknown
+	Ordering    int
 }
 
 // DigestListEntry is a row in the history list view: the cycle plus a few
 // scalar fields from the digest row, without the full rendered text.
 type DigestListEntry struct {
-	Cycle        Cycle
-	DigestID     string // empty when no digest was produced
-	Degraded     bool
-	SentAt       time.Time // zero when no digest
-	SendStatus   SendStatus
-	ItemCount    int
+	Cycle      Cycle
+	DigestID   string // empty when no digest was produced
+	Degraded   bool
+	SentAt     time.Time // zero when no digest
+	SendStatus SendStatus
+	ItemCount  int
 }
 
 // OpEvent is one entry in the operational audit log.
@@ -203,9 +203,9 @@ type CategoryRepo interface {
 // SettingsUpdate carries the settable fields of Settings. Pointer fields
 // let the caller express "leave unchanged" (nil) vs "clear" (pointer to zero).
 type SettingsUpdate struct {
-	DigestIntervalSeconds *int
+	DigestIntervalSeconds  *int
 	TelegramSubscriberChat *int64
-	UncategorizedLabel    *string
+	UncategorizedLabel     *string
 }
 
 // SettingsRepo persists the singleton operator-configuration row.

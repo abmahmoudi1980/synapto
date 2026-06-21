@@ -9,16 +9,16 @@ import (
 )
 
 type settingsRow struct {
-	ID                      string `db:"id"`
-	DigestIntervalSeconds   int    `db:"digest_interval_seconds"`
-	TelegramBotTokenRef     string `db:"telegram_bot_token_ref"`
-	TelegramSubscriberChat  int64  `db:"telegram_subscriber_chat"`
-	AIProvider              string `db:"ai_provider"`
-	AIModel                 string `db:"ai_model"`
-	AIAPIKeyRef             string `db:"ai_api_key_ref"`
-	AIBaseURL               string `db:"ai_base_url"`
-	UncategorizedLabel      string `db:"uncategorized_label"`
-	UpdatedAt               string `db:"updated_at"`
+	ID                     string `db:"id"`
+	DigestIntervalSeconds  int    `db:"digest_interval_seconds"`
+	TelegramBotTokenRef    string `db:"telegram_bot_token_ref"`
+	TelegramSubscriberChat int64  `db:"telegram_subscriber_chat"`
+	AIProvider             string `db:"ai_provider"`
+	AIModel                string `db:"ai_model"`
+	AIAPIKeyRef            string `db:"ai_api_key_ref"`
+	AIBaseURL              string `db:"ai_base_url"`
+	UncategorizedLabel     string `db:"uncategorized_label"`
+	UpdatedAt              string `db:"updated_at"`
 }
 
 func (r settingsRow) toEntity() store.Settings {

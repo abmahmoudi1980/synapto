@@ -11,25 +11,26 @@ import (
 // Config holds all runtime configuration for the assistant service.
 type Config struct {
 	// Telegram
-	TelegramBotToken      string        `env:"TELEGRAM_BOT_TOKEN" envDefault:""`
-	TelegramSubscriberChat int64         `env:"TELEGRAM_SUBSCRIBER_CHAT" envDefault:"0"`
-	TelegramFakeOut       string        `env:"TELEGRAM_FAKE_OUT" envDefault:"./.runtime/telegram-sent.jsonl"`
-	TelegramFakeSeed      string        `env:"TELEGRAM_FAKE_SEED" envDefault:"./.runtime/source-messages.yaml"`
-	TelegramUseFake       bool          `env:"TELEGRAM_USE_FAKE" envDefault:"false"`
+	TelegramBotToken       string `env:"TELEGRAM_BOT_TOKEN" envDefault:""`
+	TelegramSubscriberChat int64  `env:"TELEGRAM_SUBSCRIBER_CHAT" envDefault:"0"`
+	TelegramFakeOut        string `env:"TELEGRAM_FAKE_OUT" envDefault:"./.runtime/telegram-sent.jsonl"`
+	TelegramFakeSeed       string `env:"TELEGRAM_FAKE_SEED" envDefault:"./.runtime/source-messages.yaml"`
+	TelegramUseFake        bool   `env:"TELEGRAM_USE_FAKE" envDefault:"false"`
 
 	// AI
-	AIProvider         string        `env:"ASSISTANT_AI_PROVIDER" envDefault:"fake"`
-	AIBaseURL          string        `env:"AI_BASE_URL" envDefault:"https://api.openai.com/v1"`
-	AIModel            string        `env:"AI_MODEL" envDefault:"gpt-4o-mini"`
-	APIKey             string        `env:"AI_API_KEY" envDefault:""`
-	AIPerCallTimeout   time.Duration `env:"AI_PER_CALL_TIMEOUT" envDefault:"8s"`
-	AIMaxConcurrency   int           `env:"AI_MAX_CONCURRENCY" envDefault:"8"`
+	AIProvider       string        `env:"ASSISTANT_AI_PROVIDER" envDefault:"fake"`
+	AIBaseURL        string        `env:"AI_BASE_URL" envDefault:"https://api.openai.com/v1"`
+	AIModel          string        `env:"AI_MODEL" envDefault:"gpt-4o-mini"`
+	APIKey           string        `env:"AI_API_KEY" envDefault:""`
+	AIPerCallTimeout time.Duration `env:"AI_PER_CALL_TIMEOUT" envDefault:"8s"`
+	AIMaxConcurrency int           `env:"AI_MAX_CONCURRENCY" envDefault:"8"`
 
 	// Scheduler / digest
 	DigestInterval time.Duration `env:"DIGEST_INTERVAL" envDefault:"10m"`
 
 	// Admin HTTP
 	AdminListenAddr string `env:"ADMIN_LISTEN_ADDR" envDefault:"127.0.0.1:8080"`
+	AdminPassword   string `env:"ADMIN_PASSWORD" envDefault:""` // empty = no auth (v1 default; required for v2)
 
 	// Storage
 	DBPath string `env:"DB_PATH" envDefault:"./assistant.db"`

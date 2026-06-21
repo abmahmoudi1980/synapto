@@ -16,8 +16,8 @@ type FakeRule struct {
 // Fake is a rule-based Summarizer for tests and local development.
 // It is safe for concurrent use (the rule slice is read-only after construction).
 type Fake struct {
-	rules            []FakeRule
-	uncategorized    string
+	rules             []FakeRule
+	uncategorized     string
 	defaultConfidence float64
 }
 

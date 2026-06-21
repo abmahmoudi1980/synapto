@@ -189,14 +189,14 @@ description: "Task list for the Telegram News Digest Assistant feature"
 
 **Purpose**: Improvements that affect multiple user stories and bring the service to production quality.
 
-- [ ] T058 [P] Implement real OpenAI-compatible summarizer in `backend/internal/ai/openai.go` (system + user prompt from `contracts/ai-summarizer.md`, strict JSON response parsing, per-call timeout, `ErrUnavailable` mapping)
-- [ ] T059 [P] Add `make run-track-a`, `make run-track-b`, `make run-track-c` targets to `Makefile` that source the appropriate env file and start the binary
-- [ ] T060 [P] Add `op_events` instrumentation throughout the cycle in `backend/internal/digest/cycle.go` and the admin handlers in `backend/internal/adminapi/*.go` (cycle.start, cycle.success, cycle.degraded, cycle.failed, telegram.send.failed, telegram.send.blocked, channel.inaccessible, channel.banned, settings.changed)
-- [ ] T061 [P] Implement graceful shutdown in `backend/cmd/assistant/main.go` (cancel scheduler context, wait for current cycle to finish or hit a 30s deadline, then close DB)
-- [ ] T062 [P] Add a top-level `README.md` with build, run, configure, and deploy instructions, plus a pointer to `specs/001-telegram-news-assistant/quickstart.md`
-- [ ] T063 Run `quickstart.md` Track A end-to-end and capture baseline timings (cycle duration, send latency, admin API p95) into `specs/001-telegram-news-assistant/quickstart-baseline.md`
-- [ ] T064 [P] Run final lint + test sweep: `make lint` (gofmt + golangci-lint + eslint + prettier --check) and `make test` (Go `go test ./...` and frontend `npm test`); capture results in `docs/qa-report.md` and fix any findings before sign-off
-- [ ] T065 [P] Add admin API authentication (single admin password via `ADMIN_PASSWORD` env, session cookie, login page) — explicitly noted as a follow-up in `research.md`; included here so it ships with v1
+- [X] T058 [P] Implement real OpenAI-compatible summarizer in `backend/internal/ai/openai.go` (system + user prompt from `contracts/ai-summarizer.md`, strict JSON response parsing, per-call timeout, `ErrUnavailable` mapping)
+- [X] T059 [P] Add `make run-track-a`, `make run-track-b`, `make run-track-c` targets to `Makefile` that source the appropriate env file and start the binary
+- [X] T060 [P] Add `op_events` instrumentation throughout the cycle in `backend/internal/digest/cycle.go` and the admin handlers in `backend/internal/adminapi/*.go` (cycle.start, cycle.success, cycle.degraded, cycle.failed, telegram.send.failed, telegram.send.blocked, channel.inaccessible, channel.banned, settings.changed)
+- [X] T061 [P] Implement graceful shutdown in `backend/cmd/assistant/main.go` (cancel scheduler context, wait for current cycle to finish or hit a 30s deadline, then close DB)
+- [X] T062 [P] Add a top-level `README.md` with build, run, configure, and deploy instructions, plus a pointer to `specs/001-telegram-news-assistant/quickstart.md`
+- [X] T063 Run `quickstart.md` Track A end-to-end and capture baseline timings (cycle duration, send latency, admin API p95) into `specs/001-telegram-news-assistant/quickstart-baseline.md`
+- [X] T064 [P] Run final lint + test sweep: `make lint` (gofmt + golangci-lint + eslint + prettier --check) and `make test` (Go `go test ./...` and frontend `npm test`); capture results in `docs/qa-report.md` and fix any findings before sign-off
+- [X] T065 [P] Add admin API authentication (single admin password via `ADMIN_PASSWORD` env, session cookie, login page) — explicitly noted as a follow-up in `research.md`; included here so it ships with v1
 
 ---
 

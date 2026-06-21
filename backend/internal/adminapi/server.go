@@ -5,6 +5,7 @@ package adminapi
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -43,6 +44,12 @@ type Deps struct {
 
 	// StartedAt is the process start time, used for uptime.
 	StartedAt time.Time
+
+	// AdminPassword is the single-admin password for /api/*. Empty
+	// disables auth (development mode). When set, the API issues
+	// session cookies signed with SessionSecret.
+	AdminPassword string
+	Dev           bool // when true, the session cookie is non-Secure (allows http://)
 }
 
 // telegramClient is the subset of telegram.Client the admin API needs.
@@ -54,9 +61,10 @@ type telegramClient interface {
 
 // Server is the admin HTTP server.
 type Server struct {
-	deps Deps
-	r    chi.Router
-	http *http.Server
+	deps          Deps
+	r             chi.Router
+	http          *http.Server
+	sessionSecret []byte
 }
 
 // New constructs a Server and registers all routes.
@@ -70,7 +78,14 @@ func New(deps Deps) *Server {
 	if deps.StartedAt.IsZero() {
 		deps.StartedAt = time.Now()
 	}
-	s := &Server{deps: deps}
+	s := &Server{
+		deps: deps,
+		// Derive a per-process session secret from the password (HMAC key).
+		// A real deployment should supply its own 32-byte secret via env
+		// (ADMIN_SESSION_SECRET); for v1 the password-derived key is
+		// sufficient because the operator controls both.
+		sessionSecret: deriveSessionSecret(deps.AdminPassword),
+	}
 	s.r = s.buildRouter()
 	s.http = &http.Server{
 		Handler:      s.r,
@@ -81,6 +96,17 @@ func New(deps Deps) *Server {
 	return s
 }
 
+// deriveSessionSecret returns a 32-byte HMAC key derived from the
+// admin password. When password is empty, returns an empty slice and
+// the auth middleware is a no-op.
+func deriveSessionSecret(password string) []byte {
+	if password == "" {
+		return nil
+	}
+	sum := sha256.Sum256([]byte("synapto-session-v1:" + password))
+	return sum[:]
+}
+
 // buildRouter wires the route table.
 func (s *Server) buildRouter() chi.Router {
 	r := chi.NewRouter()
@@ -89,9 +115,13 @@ func (s *Server) buildRouter() chi.Router {
 	r.Use(loggingMiddleware(s.deps.Log))
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(30 * time.Second))
+	r.Use(s.AuthMiddleware)
 
 	r.Route("/api", func(r chi.Router) {
 		r.Get("/health", s.handleHealth)
+		r.Post("/auth/login", s.handleAuthLogin)
+		r.Post("/auth/logout", s.handleAuthLogout)
+		r.Get("/auth/status", s.handleAuthStatus)
 		s.registerChannelRoutes(r)
 		s.registerCategoryRoutes(r)
 		s.registerSettingsRoutes(r)

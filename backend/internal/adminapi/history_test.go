@@ -119,12 +119,12 @@ func TestHistory_GetCycleSucceededReturnsDigestAndItems(t *testing.T) {
 	}
 	digestID := "hist-digest-1"
 	if err := st.CreateDigest(ctx, store.Digest{
-		ID:            digestID,
-		CycleID:       cycleID,
-		RenderedText:  "📰 News digest\n\n# Politics\n• x  _(hist_chan)_\n\n# Technology\n• y  _(hist_chan)_",
-		Degraded:      false,
-		SentAt:        now,
-		SendStatus:    store.SendOK,
+		ID:           digestID,
+		CycleID:      cycleID,
+		RenderedText: "📰 News digest\n\n# Politics\n• x  _(hist_chan)_\n\n# Technology\n• y  _(hist_chan)_",
+		Degraded:     false,
+		SentAt:       now,
+		SendStatus:   store.SendOK,
 	}); err != nil {
 		t.Fatalf("create digest: %v", err)
 	}
@@ -155,8 +155,8 @@ func TestHistory_GetCycleSucceededReturnsDigestAndItems(t *testing.T) {
 			Status string `json:"status"`
 		} `json:"cycle"`
 		Digest struct {
-			ID           string `json:"id"`
-			RenderedText string `json:"rendered_text"`
+			ID            string `json:"id"`
+			RenderedText  string `json:"rendered_text"`
 			TelegramMsgID int64  `json:"telegram_msg_id"`
 			SendStatus    string `json:"send_status"`
 		} `json:"digest"`
@@ -167,9 +167,9 @@ func TestHistory_GetCycleSucceededReturnsDigestAndItems(t *testing.T) {
 				IsDefault bool   `json:"is_default"`
 			} `json:"category"`
 			Items []struct {
-				Summary    string  `json:"summary"`
+				Summary     string `json:"summary"`
 				SourceMsgID int64  `json:"source_msg_id"`
-				Channel    struct {
+				Channel     struct {
 					Handle string `json:"handle"`
 				} `json:"channel"`
 			} `json:"items"`

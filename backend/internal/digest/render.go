@@ -19,10 +19,10 @@ type RenderItem struct {
 
 // RenderInput is the data handed to Render.
 type RenderInput struct {
-	WindowEnd    time.Time
-	CycleID      string
-	Items        []RenderItem
-	Degraded     bool
+	WindowEnd     time.Time
+	CycleID       string
+	Items         []RenderItem
+	Degraded      bool
 	Uncategorized string // label used when CategoryName is empty
 }
 
