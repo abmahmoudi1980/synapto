@@ -94,6 +94,7 @@ func (s *Server) buildRouter() chi.Router {
 		r.Get("/health", s.handleHealth)
 		s.registerChannelRoutes(r)
 		s.registerCategoryRoutes(r)
+		s.registerSettingsRoutes(r)
 	})
 
 	// SPA fallback (serves frontend/build/ via //go:embed).

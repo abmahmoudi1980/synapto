@@ -147,17 +147,17 @@ description: "Task list for the Telegram News Digest Assistant feature"
 
 ### Tests for User Story 4
 
-- [ ] T044 [P] [US4] Admin API contract test for settings (GET, PATCH interval, PATCH chat id, PATCH uncategorized_label, reject out-of-range interval) in `backend/internal/adminapi/settings_test.go`
-- [ ] T045 [P] [US4] Scheduler live-reload test (`SetInterval` while a cycle is running does not interrupt it; the new interval applies from the next fire) in `backend/internal/digest/scheduler_test.go`
+- [X] T044 [P] [US4] Admin API contract test for settings (GET, PATCH interval, PATCH chat id, PATCH uncategorized_label, reject out-of-range interval) in `backend/internal/adminapi/settings_test.go`
+- [X] T045 [P] [US4] Scheduler live-reload test (`SetInterval` while a cycle is running does not interrupt it; the new interval applies from the next fire) in `backend/internal/digest/scheduler_test.go`
 
 ### Implementation for User Story 4
 
-- [ ] T046 [P] [US4] Admin API handlers in `backend/internal/adminapi/settings.go` for `GET /api/settings`, `PATCH /api/settings`, `POST /api/settings/test-telegram`, `POST /api/settings/test-ai`
-- [ ] T047 [P] [US4] Implement `digest.Scheduler.SetInterval` and a `Settings.Watch` goroutine in `backend/cmd/assistant/main.go` that observes `SettingsRepo` and calls `SetInterval` on change (depends on T045)
-- [ ] T048 [P] [US4] Frontend `HealthBadge` component in `frontend/src/lib/components/HealthBadge.svelte` (renders status, last success, last failure)
-- [ ] T049 [P] [US4] Frontend Overview page in `frontend/src/routes/+page.svelte` (depends on T048)
-- [ ] T050 [P] [US4] Frontend Settings page in `frontend/src/routes/settings/+page.svelte` (interval input, chat id input, uncategorized label input, test-telegram/test-ai buttons)
-- [ ] T051 [US4] Wire settings handlers in `main.go` and confirm SC-009 + SC-010 in `quickstart.md` Track B step B6 (depends on T046, T050)
+- [X] T046 [P] [US4] Admin API handlers in `backend/internal/adminapi/settings.go` for `GET /api/settings`, `PATCH /api/settings`, `POST /api/settings/test-telegram`, `POST /api/settings/test-ai`
+- [X] T047 [P] [US4] Implement `digest.Scheduler.SetInterval` and a `Settings.Watch` goroutine in `backend/cmd/assistant/main.go` that observes `SettingsRepo` and calls `SetInterval` on change (depends on T045)
+- [X] T048 [P] [US4] Frontend `HealthBadge` component in `frontend/src/lib/components/HealthBadge.svelte` (renders status, last success, last failure)
+- [X] T049 [P] [US4] Frontend Overview page in `frontend/src/routes/+page.svelte` (depends on T048)
+- [X] T050 [P] [US4] Frontend Settings page in `frontend/src/routes/settings/+page.svelte` (interval input, chat id input, uncategorized label input, test-telegram/test-ai buttons)
+- [X] T051 [US4] Wire settings handlers in `main.go` and confirm SC-009 + SC-010 in `quickstart.md` Track B step B6 (depends on T046, T050)
 
 **Checkpoint**: All operator-facing controls work; the live-reload of the interval is observable without a restart.
 

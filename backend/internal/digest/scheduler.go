@@ -10,23 +10,31 @@ import (
 	"github.com/synapto/assistant/internal/store"
 )
 
+// CycleRunner is the small surface the Scheduler needs from a Cycle. It
+// exists so scheduler tests can inject a stub without building the full
+// Cycle (which requires the store, AI, telegram, etc.).
+type CycleRunner interface {
+	Run(ctx context.Context, windowStart, windowEnd time.Time) (string, error)
+}
+
 // Scheduler runs the Cycle on a fixed interval. It is safe for a single
 // goroutine to call Run; the scheduler guards against overlapping cycles
 // with a mutex + atomic state flag.
 type Scheduler struct {
-	cycle     *Cycle
-	interval  time.Duration
-	log       *slog.Logger
-	cycleRepo store.CycleRepo
+	cycle      CycleRunner
+	interval   time.Duration
+	log        *slog.Logger
+	cycleRepo  store.CycleRepo
 
-	mu       sync.Mutex
-	running  atomic.Bool
-	stateVal atomic.Value
+	mu         sync.Mutex
+	running    atomic.Bool
+	stateVal   atomic.Value
+	skipFirstWait bool // test-only; see SetFirstTickDelay
 }
 
 // NewScheduler constructs a Scheduler. The interval is read from settings
 // at startup; use SetInterval to change it live.
-func NewScheduler(cycle *Cycle, interval time.Duration, cycleRepo store.CycleRepo, log *slog.Logger) *Scheduler {
+func NewScheduler(cycle CycleRunner, interval time.Duration, cycleRepo store.CycleRepo, log *slog.Logger) *Scheduler {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -36,7 +44,8 @@ func NewScheduler(cycle *Cycle, interval time.Duration, cycleRepo store.CycleRep
 }
 
 // SetInterval updates the interval. Takes effect from the next tick.
-// Safe to call while a cycle is running.
+// Safe to call while a cycle is running, and safe to call concurrently
+// with Run.
 func (s *Scheduler) SetInterval(d time.Duration) {
 	s.mu.Lock()
 	s.interval = d
@@ -58,14 +67,26 @@ func (s *Scheduler) State() string {
 	return "idle"
 }
 
+// SetFirstTickDelay lets tests skip the startup wait so the first fire
+// happens immediately. Has no effect in production.
+func (s *Scheduler) SetFirstTickDelay(_ time.Duration) {
+	s.skipFirstWait = true
+}
+
 // Run starts the scheduler. It blocks until ctx is canceled. On startup,
 // it reads LastSuccessfulWindowEnd to compute the first window, so a
 // restart never double-delivers or skips a window (FR-016, SC-008).
 func (s *Scheduler) Run(ctx context.Context) error {
 	// On startup, compute the first window from the last successful cycle.
-	lastEnd, found, err := s.cycleRepo.LastSuccessfulWindowEnd(ctx)
-	if err != nil {
-		s.log.Warn("scheduler: cannot read last window end, starting fresh", "err", err)
+	// cycleRepo may be nil in tests; in that case we start fresh.
+	var lastEnd time.Time
+	var found bool
+	if s.cycleRepo != nil {
+		var err error
+		lastEnd, found, err = s.cycleRepo.LastSuccessfulWindowEnd(ctx)
+		if err != nil {
+			s.log.Warn("scheduler: cannot read last window end, starting fresh", "err", err)
+		}
 	}
 	now := time.Now().UTC()
 	var firstTick time.Time
@@ -84,8 +105,8 @@ func (s *Scheduler) Run(ctx context.Context) error {
 	}
 	s.log.Info("scheduler starting", "interval", s.Interval(), "first_tick", firstTick.Format(time.RFC3339))
 
-	// Wait until the first tick.
-	if d := time.Until(firstTick); d > 0 {
+	// Wait until the first tick (skipped in tests via SetFirstTickDelay).
+	if d := time.Until(firstTick); d > 0 && !s.skipFirstWait {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()

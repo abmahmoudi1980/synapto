@@ -1,21 +1,7 @@
-<script context="module" lang="ts">
-	function formatUptime(s: number): string {
-		if (s < 60) return `${s}s`;
-		const m = Math.floor(s / 60);
-		if (m < 60) return `${m}m`;
-		const h = Math.floor(m / 60);
-		const rem = m % 60;
-		if (h < 24) return rem > 0 ? `${h}h ${rem}m` : `${h}h`;
-		const d = Math.floor(h / 24);
-		const remH = h % 24;
-		return remH > 0 ? `${d}d ${remH}h` : `${d}d`;
-	}
-</script>
-
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { api, type Health } from '$lib/api';
-	import StatusBadge from '$lib/components/StatusBadge.svelte';
+	import HealthBadge from '$lib/components/HealthBadge.svelte';
 	import Icon from '$lib/components/Icon.svelte';
 
 	let health: Health | null = null;
@@ -38,31 +24,16 @@
 
 	onMount(load);
 
-	function statusKind(h: Health | null): 'ok' | 'warning' | 'unreachable' {
-		if (!h) return 'unreachable';
-		if (!h.db_ok) return 'warning';
-		return h.status === 'ok' || h.status === 'degraded' ? 'ok' : 'warning';
-	}
-
-	function statusLabel(h: Health | null): string {
-		if (!h) return 'unreachable';
-		if (!h.db_ok) return 'db error';
-		return h.status;
-	}
-
-	function schedulerKind(state: string | undefined): 'idle' | 'running' | 'failed' {
-		if (state === 'running') return 'running';
-		if (state === 'failed') return 'failed';
-		return 'idle';
-	}
-
-	function formatDate(iso: string | null): string {
-		if (!iso) return 'never';
-		try {
-			return new Date(iso).toLocaleString();
-		} catch {
-			return iso;
-		}
+	function formatUptime(s: number): string {
+		if (s < 60) return `${s}s`;
+		const m = Math.floor(s / 60);
+		if (m < 60) return `${m}m`;
+		const h = Math.floor(m / 60);
+		const rem = m % 60;
+		if (h < 24) return rem > 0 ? `${h}h ${rem}m` : `${h}h`;
+		const d = Math.floor(h / 24);
+		const remH = h % 24;
+		return remH > 0 ? `${d}d ${remH}h` : `${d}d`;
 	}
 </script>
 
@@ -93,62 +64,25 @@
 		</div>
 	</div>
 {:else if health}
-	<section class="kpi-grid" aria-label="Service KPIs">
-		<article class="kpi-card surface">
-			<header>
-				<span class="kpi-label">Status</span>
-				<StatusBadge kind={statusKind(health)} label={statusLabel(health)} size="md" />
-			</header>
-			<p class="kpi-meta">Database: {health.db_ok ? 'connected' : 'disconnected'}</p>
-		</article>
+	<HealthBadge
+		status={health.status}
+		dbOk={health.db_ok}
+		lastSuccessfulCycleAt={health.last_successful_cycle_at}
+		lastFailureAt={health.last_failure_at}
+		lastFailureReason={health.last_failure_reason}
+		version={health.version}
+		schedulerState={health.scheduler_state}
+	/>
 
-		<article class="kpi-card surface">
-			<header>
-				<span class="kpi-label">Scheduler</span>
-				<StatusBadge
-					kind={schedulerKind(health.scheduler_state)}
-					label={health.scheduler_state}
-					size="md"
-				/>
-			</header>
-			<p class="kpi-meta">Last refresh: {refreshAt || '—'}</p>
-		</article>
-
+	<section class="kpi-grid" aria-label="Operational metrics">
 		<article class="kpi-card surface">
 			<header>
 				<span class="kpi-label">Uptime</span>
 				<span class="kpi-mono">{formatUptime(health.uptime_seconds)}</span>
 			</header>
-			<p class="kpi-meta">Version {health.version}</p>
-		</article>
-
-		<article class="kpi-card surface">
-			<header>
-				<span class="kpi-label">Last successful cycle</span>
-				<span class="kpi-mono">{formatDate(health.last_successful_cycle_at)}</span>
-			</header>
-			<p class="kpi-meta">Last failure: {formatDate(health.last_failure_at)}</p>
+			<p class="kpi-meta">Last refresh: {refreshAt || '—'}</p>
 		</article>
 	</section>
-
-	{#if health.last_failure_at}
-		<section class="surface callout danger" aria-label="Last failure">
-			<header>
-				<Icon name="warning" size={18} />
-				<h2>Last failure</h2>
-			</header>
-			<dl>
-				<div>
-					<dt>When</dt>
-					<dd>{formatDate(health.last_failure_at)}</dd>
-				</div>
-				<div>
-					<dt>Reason</dt>
-					<dd>{health.last_failure_reason || '—'}</dd>
-				</div>
-			</dl>
-		</section>
-	{/if}
 
 	<section class="surface links" aria-label="Quick links">
 		<h2>Quick links</h2>
@@ -173,13 +107,15 @@
 				</span>
 				<Icon name="arrow-right" size={16} />
 			</a>
-			<a class="link-card" href="/history">
+			<a class="link-card" href="/settings">
 				<span class="link-icon" aria-hidden="true">
-					<Icon name="history" size={20} />
+					<Icon name="cog" size={20} />
 				</span>
 				<span>
-					<strong>Browse history</strong>
-					<small>Open past digests and audit events for any cycle.</small>
+					<strong>Settings & probes</strong>
+					<small
+						>Adjust the digest interval, subscriber chat, and AI/Telegram credentials.</small
+					>
 				</span>
 				<Icon name="arrow-right" size={16} />
 			</a>
@@ -243,7 +179,7 @@
 		display: grid;
 		grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 		gap: var(--space-4);
-		margin-bottom: var(--space-5);
+		margin: var(--space-5) 0;
 	}
 	.kpi-card {
 		padding: var(--space-4);
@@ -275,48 +211,6 @@
 		color: var(--color-text-subtle);
 	}
 
-	.callout {
-		padding: var(--space-4);
-		margin-bottom: var(--space-5);
-	}
-	.callout header {
-		display: flex;
-		align-items: center;
-		gap: 0.5rem;
-		color: var(--color-text);
-		margin-bottom: 0.5rem;
-	}
-	.callout h2 {
-		font-size: var(--text-lg);
-		margin: 0;
-	}
-	.callout.danger {
-		border-color: var(--color-danger-soft);
-		background: var(--color-danger-soft);
-	}
-	.callout.danger header {
-		color: var(--color-danger);
-	}
-	.callout dl {
-		display: grid;
-		grid-template-columns: auto 1fr;
-		gap: 0.4rem 1rem;
-		margin: 0;
-	}
-	.callout dt {
-		font-size: var(--text-xs);
-		font-weight: 600;
-		text-transform: uppercase;
-		letter-spacing: 0.04em;
-		color: var(--color-text-muted);
-	}
-	.callout dd {
-		margin: 0;
-		font-size: var(--text-sm);
-		font-family: var(--font-mono);
-		color: var(--color-text);
-	}
-
 	.links {
 		padding: var(--space-5);
 	}
@@ -340,8 +234,7 @@
 		text-decoration: none;
 		transition:
 			border-color var(--duration-base) var(--ease-out),
-			background var(--duration-base) var(--ease-out),
-			transform var(--duration-base) var(--ease-out);
+			background var(--duration-base) var(--ease-out);
 	}
 	.link-card:hover {
 		border-color: var(--color-primary);

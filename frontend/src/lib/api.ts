@@ -17,6 +17,20 @@ export interface Category {
 	is_default: boolean;
 }
 
+export interface Settings {
+	digest_interval_seconds: number;
+	telegram_bot_token_ref: string;
+	telegram_subscriber_chat: number;
+	telegram_bot_reachable: boolean | null;
+	ai_provider: string;
+	ai_model: string;
+	ai_base_url: string;
+	ai_api_key_ref: string;
+	ai_reachable: boolean | null;
+	uncategorized_label: string;
+	updated_at: string;
+}
+
 export interface Health {
 	status: string;
 	version: string;
@@ -78,6 +92,23 @@ export const api = {
 		request('PATCH', `/api/categories/${id}`, { name }),
 
 	removeCategory: (id: string): Promise<void> => request('DELETE', `/api/categories/${id}`),
+
+	// Settings
+	getSettings: (): Promise<{ settings: Settings }> => request('GET', '/api/settings'),
+
+	patchSettings: (patch: {
+		digest_interval_seconds?: number;
+		telegram_subscriber_chat?: number;
+		uncategorized_label?: string;
+	}): Promise<{ settings: Settings }> => request('PATCH', '/api/settings', patch),
+
+	testTelegram: (): Promise<{
+		ok: boolean;
+		bot: { id: number; username: string; first_name: string };
+	}> => request('POST', '/api/settings/test-telegram', {}),
+
+	testAI: (): Promise<{ ok: boolean; model: string; latency_ms: number }> =>
+		request('POST', '/api/settings/test-ai', {}),
 
 	// Health
 	getHealth: (): Promise<Health> => request('GET', '/api/health')

@@ -21,6 +21,7 @@ import (
 	"github.com/synapto/assistant/internal/config"
 	"github.com/synapto/assistant/internal/digest"
 	"github.com/synapto/assistant/internal/logging"
+	"github.com/synapto/assistant/internal/store"
 	"github.com/synapto/assistant/internal/store/sqlite"
 	"github.com/synapto/assistant/internal/telegram"
 )
@@ -136,7 +137,7 @@ func run() error {
 	scheduler := digest.NewScheduler(cycle, cfg.DigestInterval, sqlite.CycleStore{S: st}, log)
 
 	// HTTP server goroutine.
-	errCh := make(chan error, 2)
+	errCh := make(chan error, 3)
 	go func() {
 		log.Info("admin http listening", "addr", cfg.AdminListenAddr)
 		if err := srv.Serve(cfg.AdminListenAddr); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -150,6 +151,13 @@ func run() error {
 			errCh <- fmt.Errorf("scheduler: %w", err)
 		}
 	}()
+
+	// Settings watcher: polls the settings row and pushes interval changes
+	// into the scheduler live. This satisfies SC-005/010 — the operator
+	// can change the digest interval from the admin panel without
+	// restarting the service.
+	settingsStore := sqlite.SettingsStore{S: st}
+	go watchSettings(ctx, settingsStore, scheduler, log, cfg.DigestInterval)
 
 	// Graceful shutdown on SIGINT/SIGTERM.
 	sigCh := make(chan os.Signal, 1)
@@ -170,6 +178,43 @@ func run() error {
 	cancel()
 	log.Info("assistant stopped")
 	return nil
+}
+
+// watchSettings polls the settings row on a short interval and pushes
+// any change to digest_interval_seconds into the scheduler live. The
+// settings row is also where uncategorized_label and subscriber_chat_id
+// live; the cycle reads those on every fire, so they pick up changes
+// without explicit watching.
+func watchSettings(
+	ctx context.Context,
+	settings store.SettingsRepo,
+	scheduler *digest.Scheduler,
+	log *slog.Logger,
+	initialInterval time.Duration,
+) {
+	tick := time.NewTicker(5 * time.Second)
+	defer tick.Stop()
+
+	lastInterval := initialInterval
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+			cur, err := settings.Get(ctx)
+			if err != nil {
+				log.Warn("settings watcher: get failed", "err", err)
+				continue
+			}
+			d := time.Duration(cur.DigestIntervalSeconds) * time.Second
+			if d != lastInterval {
+				log.Info("settings watcher: interval changed",
+					"from", lastInterval, "to", d)
+				scheduler.SetInterval(d)
+				lastInterval = d
+			}
+		}
+	}
 }
 
 // newSummarizer picks the AI implementation based on config.
