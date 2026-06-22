@@ -48,13 +48,19 @@ CREATE TABLE settings (
   digest_interval_seconds  INTEGER NOT NULL,    -- default 600
   telegram_bot_token_ref   TEXT NOT NULL,       -- secret reference; raw value lives in env
   telegram_subscriber_chat INTEGER NOT NULL,    -- chat id of the subscriber
-  ai_provider              TEXT NOT NULL,       -- 'openai' | 'fake' | future
-  ai_model                 TEXT NOT NULL,       -- e.g. 'gpt-4o-mini'
+  ai_provider              TEXT NOT NULL,       -- 'openai' | 'anthropic' | 'fake' | future
+  ai_model                 TEXT NOT NULL,       -- e.g. 'gpt-4o-mini', 'minimax-m3'
   ai_api_key_ref           TEXT NOT NULL,       -- secret reference
   ai_base_url              TEXT NOT NULL,       -- e.g. 'https://api.openai.com/v1'
   uncategorized_label      TEXT NOT NULL DEFAULT 'Uncategorized',
   updated_at               TEXT NOT NULL
 );
+-- The four AI fields (provider, model, base_url, api_key_ref) are
+-- re-synced from the env file on every boot via store.SyncAISettings,
+-- called from main after the initial seed. The operator-tunable
+-- fields (digest_interval_seconds, telegram_subscriber_chat,
+-- uncategorized_label) are NOT touched by the sync, so admin edits
+-- persist across restarts.
 
 -- One row per cycle execution
 CREATE TABLE cycles (
@@ -220,7 +226,18 @@ type HealthRepo interface {
 
 - A cycle is created `pending` before fetches start.
 - The cycle is finished exactly once, with one of the four terminal states.
+- **`failed` is used both for "send to Telegram failed" and for "no recipient configured"** (the cycle has items to send but `telegram_subscriber_chat` is 0 in the DB and `TELEGRAM_SUBSCRIBER_CHAT` is 0 in the env, or no chat id was auto-discovered from `/start`). The two cases are distinguished by the op_event kind (`telegram.send.failed` vs `telegram.send.no_recipient`).
 - The scheduler reads `LastSuccessfulWindowEnd` on startup to compute the first post-restart window (FR-016, SC-008). If the last cycle's window is still "open" (i.e. less than `digest_interval_seconds` has passed since its end), the scheduler waits the remainder; if the window is already "overdue", the next cycle starts immediately with `window_start = last_window_end`.
+
+### Digest delivery status
+
+`digests.send_status` reflects what actually happened on the wire:
+
+- `ok` — Telegram accepted the message; `telegram_msg_id` is populated with the id Telegram assigned.
+- `failed` — the `sendMessage` call returned an error (network, 4xx, 5xx). The exact reason is recorded in an op event with `kind='telegram.send.failed'`. The cycle's `status` is then also `failed`. A subsequent retry happens on the next cycle if new items arrive.
+- `blocked` — Telegram returned a "bot was blocked by the user" / "Forbidden" response. Same handling as `failed`, but the op event kind is `telegram.send.blocked`. The cycle backs off (does not retry the same window).
+
+If no recipient is configured when the cycle has items to send, the digest is still created (so the operator can see the rendered text in the history view) but `send_status='failed'`, `telegram_msg_id=NULL`, `sent_at=NULL`, and an op event of `kind='telegram.send.no_recipient'` is recorded. The system does not mark un-sent digests as `ok`.
 
 ### Category lifecycle
 
@@ -254,8 +271,30 @@ type HealthRepo interface {
 ## Initial seed data
 
 - `categories` rows for the shipped defaults.
-- `settings` row with sensible defaults (`digest_interval_seconds = 600`, `uncategorized_label = 'Uncategorized'`, `ai_provider = 'fake'` when no AI env is set so a fresh boot is safe and self-testing).
+- `settings` row with sensible defaults (`digest_interval_seconds = 600`, `uncategorized_label = 'Uncategorized'`, `ai_provider = 'fake'`, `ai_model = 'gpt-4o-mini'`, `ai_base_url = 'https://api.openai.com/v1'`, `telegram_subscriber_chat = 0`, `ai_api_key_ref = 'env:AI_API_KEY'` when no AI env is set so a fresh boot is safe and self-testing).
+- After the seed, the AI fields (`ai_provider`, `ai_model`, `ai_base_url`, `ai_api_key_ref`) are re-synced from the live env on every boot, so the panel reflects the running configuration. Operator-tunable fields are left as-is.
 - No `channels` rows, no `cycles` rows, no `digests` rows.
+
+## Operational event kinds (audit log)
+
+`op_events.kind` is a free-form string. The set produced by the system in v1.x is:
+
+| Kind | When |
+|---|---|
+| `cycle.start` | A new cycle is created and fetches begin. |
+| `cycle.fetched` | Fetches completed; carries `raw` and `deduped` counts. |
+| `cycle.summarized` | AI summarization completed; carries `items` and `degraded`. |
+| `cycle.success` | Cycle completed with `status='succeeded'`. |
+| `cycle.degraded` | Cycle completed with `status='degraded'`. |
+| `cycle.skipped_no_items` | Cycle completed with `status='skipped_no_items'`. |
+| `cycle.failed` | Cycle completed with `status='failed'`. |
+| `channel.fetch.ok` | A channel was fetched without error. |
+| `channel.inaccessible` | A channel's Telegram getChat/fetch failed; the channel is marked `inaccessible`. |
+| `channel.banned` | A channel was promoted from `inaccessible` after repeated failures. |
+| `telegram.send.failed` | The send side returned an error (network / API 4xx or 5xx). |
+| `telegram.send.blocked` | Telegram returned a "bot blocked by the user" response. |
+| `telegram.send.no_recipient` | The cycle had items to send but no subscriber chat id was configured. Distinct from `telegram.send.failed` so the operator can tell the two apart in the events view. |
+| `settings.changed` | The operator-tunable settings row was PATCHed. |
 
 ## Migration policy
 

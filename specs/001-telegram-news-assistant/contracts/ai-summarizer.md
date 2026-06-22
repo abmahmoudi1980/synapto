@@ -70,7 +70,7 @@ var (
 
 ## Default implementation: OpenAI Chat Completions
 
-The default implementation (`internal/ai/openai.go`) calls the **OpenAI Chat Completions API** at `<ai_base_url>/chat/completions` with a model of `<ai_model>`. The implementation uses `github.com/sashabaranov/go-openai` as the transport.
+The OpenAI implementation (`internal/ai/openai.go`) calls the **OpenAI Chat Completions API** at `<ai_base_url>/chat/completions` with a model of `<ai_model>`. The implementation uses `github.com/sashabaranov/go-openai` as the transport. Selected by `ASSISTANT_AI_PROVIDER=openai`.
 
 ### Request shape
 
@@ -107,6 +107,36 @@ The implementation sends a single system + user message pair:
 - If the response is valid JSON but the `category` value is not in the configured set and is not `uncategorized_label`, the implementation returns `(Output{Summary, settings.uncategorized_label, Confidence}, ErrCategoryUnknown)`.
 - HTTP / network errors are mapped to `ErrUnavailable`.
 
+## Anthropic Messages API implementation
+
+The Anthropic implementation (`internal/ai/anthropic.go`) calls the **Anthropic Messages API** at `<ai_base_url>/messages` with a model of `<ai_model>`. Selected by `ASSISTANT_AI_PROVIDER=anthropic`. Useful for environments that already proxy through the Anthropic Messages API (e.g. the opencode.ai gateway at `https://opencode.ai/zen/go/v1`).
+
+### Request shape
+
+`POST <ai_base_url>/messages`, headers:
+- `Content-Type: application/json`
+- `x-api-key: <AI_API_KEY>`
+- `anthropic-version: 2023-06-01`
+
+```json
+{
+  "model": "<ai_model>",
+  "max_tokens": 512,
+  "system": "You are a news digest assistant. …",   // same system prompt as OpenAI
+  "messages": [
+    { "role": "user", "content": "Channel: @<handle>\nMedia kind: <MediaKind>\n\nText:\n<<text>>\n\nCaptions:\n<<captions>>" }
+  ]
+}
+```
+
+### Response handling
+
+- Parse the JSON response, find the first `content` block of type `text`, strip any markdown fences, decode the embedded JSON (`{summary, category, confidence}`), and validate against the contract.
+- If the response is not valid JSON, the call returns `ErrUnavailable`.
+- `category` validation: same as OpenAI (`ErrCategoryUnknown` if not in the configured set).
+- HTTP / network errors and Anthropic `type: "error"` responses are mapped to `ErrUnavailable`.
+- Per-call timeout (`AI_PER_CALL_TIMEOUT`, default 8s) is enforced by `context.WithTimeout`.
+
 ## Fake implementation (tests, dev)
 
 `internal/ai/fake.go` provides `ai.NewFake(map[string]FakeRule)` where `FakeRule` is `{ Match func(Input) bool; Output Output }`. The fake iterates the rules in order and returns the first match's `Output`. If no rule matches, it returns a default `{Summary: "<truncated text>", Category: settings.uncategorized_label, Confidence: 0.5}`. The fake is wired automatically when `ASSISTANT_AI_PROVIDER=fake` or when no AI env vars are present at startup.
@@ -115,13 +145,15 @@ The implementation sends a single system + user message pair:
 
 | Env var | Required | Default | Notes |
 |---|---|---|---|
-| `ASSISTANT_AI_PROVIDER` | no | `openai` | one of `openai`, `fake` |
-| `AI_BASE_URL` | yes (when provider=openai) | `https://api.openai.com/v1` | any OpenAI-compatible endpoint |
-| `AI_MODEL` | yes (when provider=openai) | `gpt-4o-mini` | any chat-completions model on the endpoint |
-| `AI_API_KEY` | yes (when provider=openai) | — | the API key (loaded into `ai_api_key_ref` as `env:AI_API_KEY`) |
+| `ASSISTANT_AI_PROVIDER` | no | `fake` | one of `fake`, `openai`, `anthropic` |
+| `AI_BASE_URL` | yes (when provider is real) | `https://api.openai.com/v1` | OpenAI-compatible endpoint or Anthropic-Messages-compatible endpoint, depending on provider |
+| `AI_MODEL` | yes (when provider is real) | `gpt-4o-mini` (openai) / `claude-3-5-sonnet-…` (anthropic) | any chat-completions model or Anthropic model name, respectively |
+| `AI_API_KEY` | yes (when provider is real) | — | the API key (loaded into `ai_api_key_ref` as `env:AI_API_KEY`) |
 | `AI_PER_CALL_TIMEOUT` | no | `8s` | Go duration string |
 | `AI_MAX_CONCURRENCY` | no | `8` | max in-flight `Summarize` calls per cycle |
 
+The four AI fields (`ai_provider`, `ai_model`, `ai_base_url`, `ai_api_key_ref`) are persisted into the `settings` row and re-synced from the env on every boot. The operator-tunable fields (`digest_interval_seconds`, `telegram_subscriber_chat`, `uncategorized_label`) are NOT touched by the sync.
+
 ## Versioning
 
-- The interface signature is part of the **internal** Go API and may change between minor versions. A breaking change to the on-the-wire request/response shape is allowed only with a new contract version (this file). The OpenAI implementation is the de-facto reference; future adapters (Anthropic, local models) are expected to map onto the same `Summarizer` interface.
+- The interface signature is part of the **internal** Go API and may change between minor versions. A breaking change to the on-the-wire request/response shape is allowed only with a new contract version (this file). The OpenAI implementation is the de-facto reference; the Anthropic adapter (`internal/ai/anthropic.go`) maps the same `Summarizer` interface onto the Anthropic Messages API. Future adapters (local models, Cohere, etc.) are expected to follow the same shape.

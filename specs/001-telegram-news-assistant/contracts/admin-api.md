@@ -159,6 +159,8 @@ Read the operator settings.
 
 `telegram_bot_reachable` and `ai_reachable` are derived live (last health probe), not persisted.
 
+The four AI fields (`ai_provider`, `ai_model`, `ai_base_url`, `ai_api_key_ref`) reflect the **live env** on the running process: the cycle calls `store.SyncAISettings` at every boot, so the panel shows the values the cycle is actually using. They are read-only via this endpoint; rotation is a startup-time operation (re-launch the process with a new env var).
+
 #### `PATCH /api/settings`
 
 Partial update. `digest_interval_seconds` and `telegram_subscriber_chat` are settable. Credentials (`*_ref` fields) are read-only via this endpoint; rotation is a startup-time operation (re-launch the process with a new env var). `uncategorized_label` is settable.
@@ -284,6 +286,8 @@ Get a single cycle, its digest (if any), and the list of digest items grouped by
 }
 ```
 
+When the cycle had items to send but no recipient was configured, the digest row is still present (so the operator can see what would have been sent) but `send_status="failed"`, `telegram_msg_id=null`, and `sent_at=null`. The accompanying op event has `kind="telegram.send.no_recipient"` so the operator can distinguish this from a real Telegram send failure.
+
 **Error codes**: `cycle_not_found`, `digest_not_available` (when the cycle had no items and produced no digest).
 
 ---
@@ -311,12 +315,30 @@ Return the most recent operational events (newest first), drawn from the `op_eve
 }
 ```
 
+**Event kinds** (see `data-model.md` for the full audit log):
+
+| `kind` | `level` | Meaning |
+|---|---|---|
+| `cycle.start` | info | New cycle is created and fetches begin. |
+| `cycle.fetched` | info | Fetches completed (`raw` and `deduped` counts in `context`). |
+| `cycle.summarized` | info | AI summarization completed (`items` and `degraded` in `context`). |
+| `cycle.success` | info | Cycle terminal: `status='succeeded'`. |
+| `cycle.degraded` | warn | Cycle terminal: `status='degraded'` (AI fell back to raw headlines). |
+| `cycle.skipped_no_items` | info | Cycle terminal: `status='skipped_no_items'`. |
+| `cycle.failed` | error | Cycle terminal: `status='failed'`. |
+| `telegram.send.failed` | warn | The sendMessage call returned an error (network / API 4xx-5xx). |
+| `telegram.send.blocked` | warn | Telegram returned a "bot blocked by the user" / Forbidden response. |
+| `telegram.send.no_recipient` | warn | The cycle had items to send but `telegram_subscriber_chat` and `TELEGRAM_SUBSCRIBER_CHAT` are both 0. The digest is still recorded with `send_status='failed'` so the operator can see what would have been sent. Set the env var, `PATCH /api/settings`, or switch to `TELEGRAM_SOURCE=longpoll` to auto-discover the chat id from `/start`. |
+| `settings.changed` | info | The operator-tunable settings row was PATCHed. |
+
 ---
 
-## CORS, cookies, and auth (phase 1)
+## CORS, cookies, and auth
 
 - The admin API is served from the **same origin** as the SPA (the Go binary serves both). No CORS is configured; no CORS preflight is expected.
-- There is no auth layer in phase 1. The admin `LISTEN_ADDR` should be bound to a non-public interface (e.g. `127.0.0.1:8080`) or placed behind a reverse-proxy / VPN by the operator. This is documented in the `README` and in the spec's `Assumptions`.
+- When `ADMIN_PASSWORD` is set, the admin API is gated by a single-admin-password session cookie (`synapto_session`, HMAC-SHA256 signed, 12 h TTL, `HttpOnly`, `SameSite=Lax`, `Path=/`). The cookie's `Secure` flag follows the effective request protocol: `Secure=true` when the request is over HTTPS (`r.TLS != nil` or `X-Forwarded-Proto: https`, for deployments behind a TLS-terminating reverse proxy), `Secure=false` over plain HTTP. This makes the cookie round-trip on a plain-HTTP deployment while still locking it to HTTPS when a TLS terminator is in front.
+- When `ADMIN_PASSWORD` is empty, the middleware is a no-op (v1 dev workflow). The admin `LISTEN_ADDR` should then be bound to a non-public interface or placed behind a reverse proxy / VPN.
+- Session endpoints (under `/api/auth/*`) and the health probe (`/api/health`) are exempt from the auth middleware so the SPA can probe state and the operator can monitor without a session.
 
 ## Versioning
 

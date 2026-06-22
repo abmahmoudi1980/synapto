@@ -29,7 +29,7 @@
 ### Field-by-field rules
 
 - **Header**: `📰 News digest — <window_end in YYYY-MM-DD HH:MM UTC>`. The leading `📰` is a fixed emoji; the timestamp uses UTC for determinism (no per-user timezone in phase 1).
-- **Category heading**: a single line, `# <name>`. Names are taken verbatim from the `categories` table; if a category has been removed, items in it are placed under the `uncategorized_label` from settings.
+- **Category heading**: a single line, `\# <name>` (the leading `#` is backslash-escaped so Telegram's MarkdownV2 parser accepts it as a literal `#`, not as a header marker). Names are taken verbatim from the `categories` table; if a category has been removed, items in it are placed under the `uncategorized_label` from settings. The escaped heading renders as plain `# Technology` text — not a bold heading — which is the trade-off for parseability.
 - **Item line**: a single bullet, `• <summary>  _(<channel_handle>)_`. The trailing `_(...)_` is the channel handle, lowercased, no leading `@`. For non-text items, the summary is prefixed with `[<MediaKind>] ` (e.g. `[Image]`, `[Video]`, `[Voice]`); the bracketed prefix is rendered as part of the summary text.
 - **Footer**: a single line, `— cycle <short_id> · <N> items · <status>`. `<short_id>` is the first 8 chars of the cycle UUID. `<status>` is `ok` for a clean cycle, `degraded` for a cycle that fell back to raw headlines (FR-007 edge case).
 - **No trailing newlines** other than the one terminating the footer line.
@@ -38,10 +38,13 @@
 
 - Summaries are produced by the AI summarizer. If the AI returns a summary longer than 280 characters, the renderer truncates at 277 characters and appends `…`.
 - Summaries are written on a single line; embedded newlines in the AI output are replaced with a single space.
-- Backticks, asterisks, and underscores in summaries are **escaped** in the Telegram output to avoid accidental Markdown formatting:
-  - `` ` `` → `` ` `` + ZWSP (`\u200b`) before it
-  - `*` → `*` + ZWSP before it
-  - `_` → `\` + `_` (Telegram MarkdownV2 escape)
+- The renderer is fully MarkdownV2-aware. Every reserved character in the rendered text is escaped so Telegram accepts the message. The set, in priority order:
+  - `` ` `` → `` ` `` + ZWSP (`\u200b`) before it (so it stays visible but doesn't open a code span)
+  - `*` → `*` + ZWSP before it (so the AI's mid-word asterisks don't open bold/italic)
+  - `_` → `\_` (Telegram MarkdownV2 escape; appears as a literal `_`)
+  - `[` → `\[`, `]` → `\]`, `(` → `\(`, `)` → `\)` (literal brackets and parens)
+  - `~` → `\~`, `` ` `` → `` ` ``+ZWSP, `>` → `\>`, `#` → `\#`, `+` → `\+`, `-` → `\-` (date hyphens, headings, etc.)
+  - `=` → `\=`, `|` → `\|`, `{` → `\{`, `}` → `\}`, `.` → `\.`, `!` → `\!`
 - The renderer uses **Telegram MarkdownV2** (`parse_mode = MarkdownV2`) for the send call. This is documented in `internal/telegram/sender.go`; if MarkdownV2 is rejected by Telegram for any reason, the sender retries once with `parse_mode = ""` (plain text) using the same content with all escape characters stripped.
 
 ### Non-text items
@@ -79,15 +82,17 @@ When a cycle's AI summarizer failed and the renderer fell back to raw headlines:
 
 ## Worked example (single message, two categories, three items)
 
+The example below shows the **raw string sent over the wire**, including all MarkdownV2 escapes. The human sees the same text without the backslashes (Telegram renders the escaped form).
+
 ```
-📰 News digest — 2026-06-21 07:20 UTC
+📰 News digest — 2026\-06\-21 07:20 UTC
 
-# Technology
+\# Technology
 • Telegram rolls out scheduled messages in channels  \_(telegram\)
-• A new open-source LLM beats GPT-4 on a public benchmark  \_(ml_news\)
+• A new open\-source LLM beats GPT\-4 on a public benchmark  \_(ml\_news\)
 
-# Politics
-• EU parliament passes the AI Liability Directive  \_(eu_updates\)
+\# Politics
+• EU parliament passes the AI Liability Directive  \_(eu\_updates\)
 
 — cycle 8a3f1c20 · 3 items · ok
 ```
@@ -96,20 +101,20 @@ When a cycle's AI summarizer failed and the renderer fell back to raw headlines:
 
 Message 1:
 ```
-📰 News digest — 2026-06-21 07:20 UTC
+📰 News digest — 2026\-06\-21 07:20 UTC
 
-# Technology
+\# Technology
 • … (items 1..N)
 
-# Politics
+\# Politics
 • … (items N+1..M)
 ```
 
 Message 2:
 ```
-📰 News digest (continued) — 2026-06-21 07:20 UTC
+📰 News digest (continued) — 2026\-06\-21 07:20 UTC
 
-# Sports
+\# Sports
 • … (items M+1..K)
 
 — cycle 8a3f1c20 · K items · ok
@@ -118,9 +123,9 @@ Message 2:
 ## Worked example (degraded mode, AI unavailable)
 
 ```
-📰 News digest — 2026-06-21 07:20 UTC
+📰 News digest — 2026\-06\-21 07:20 UTC
 
-# Technology
+\# Technology
 ⚠️ <verbatim message text, ≤ 280 chars>  \_(telegram\)
 
 — cycle 8a3f1c20 · 1 items · degraded (AI unavailable)
