@@ -36,7 +36,7 @@ services:
     # interface and add ADMIN_PASSWORD for the login page. To bind on a
     # LAN address instead, set ADMIN_LISTEN_ADDR in the env file.
     ports:
-      - "127.0.0.1:8080:8080"
+      - "8080:8080"
 
     env_file:
       - path: .runtime/assistant.env
