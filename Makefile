@@ -24,7 +24,8 @@ NPM = npm
 
 .PHONY: all deps build build-frontend build-backend run test test-backend \
         test-frontend lint lint-go lint-fe fmt fmt-go fmt-fe clean help \
-        env-track-a env-track-b env-track-c run-track-a run-track-b run-track-c
+        env-track-a env-track-b env-track-c run-track-a run-track-b run-track-c \
+        docker-build docker-run docker-up docker-down docker-logs docker-push
 
 all: build
 
@@ -156,5 +157,57 @@ help:
 	@echo "  run-track-a    - run Track A locally (fake Telegram + fake AI)"
 	@echo "  run-track-b    - run Track B locally (real Telegram + fake AI)"
 	@echo "  run-track-c    - run Track C locally (real Telegram + real AI)"
+	@echo "  docker-build   - build the production image (Dockerfile)"
+	@echo "  docker-run     - run the image with a one-shot docker run (no compose)"
+	@echo "  docker-up      - start the stack via docker compose"
+	@echo "  docker-down    - stop the stack via docker compose"
+	@echo "  docker-logs    - tail the assistant container logs"
+	@echo "  docker-push    - push the image to the registry"
 	@echo ""
 	@echo "Validation tracks are documented in specs/001-telegram-news-assistant/quickstart.md"
+
+# ---- Docker ----------------------------------------------------------------
+# Build a single production image containing the SPA + Go binary. Tag is
+# overridable with IMAGE / VERSION on the command line:
+#   make docker-build VERSION=$(git describe --tags --always)
+IMAGE ?= synapto/assistant
+VERSION ?= 0.1.0-dev
+TAG ?= $(IMAGE):$(VERSION)
+LATEST ?= $(IMAGE):latest
+
+docker-build:
+	docker build -t $(TAG) -t $(LATEST) --build-arg VERSION=$(VERSION) .
+
+# One-shot run: bind 127.0.0.1:8080 on the host, persist the SQLite DB on
+# a named volume, source the env file. Useful for quick smoke tests; the
+# docker-compose stack is the recommended path for a real deployment.
+docker-run:
+	@if [ ! -f .runtime/assistant.env ]; then \
+		if [ -f deploy/assistant.env.example ]; then \
+			echo ".runtime/assistant.env not found. Copying deploy/assistant.env.example to get started."; \
+			mkdir -p .runtime; \
+			cp deploy/assistant.env.example .runtime/assistant.env; \
+		else \
+			echo ".runtime/assistant.env not found and no deploy/assistant.env.example template available."; \
+			exit 1; \
+		fi; \
+	fi
+	docker run --rm -it \
+		--name synapto-assistant \
+		-p 127.0.0.1:8080:8080 \
+		--env-file .runtime/assistant.env \
+		-v synapto-data:/data \
+		$(TAG)
+
+docker-up:
+	docker compose up -d --build
+
+docker-down:
+	docker compose down
+
+docker-logs:
+	docker compose logs -f assistant
+
+docker-push:
+	docker push $(TAG)
+	docker push $(LATEST)

@@ -75,6 +75,10 @@ Other targets:
 | `make run-track-a` | run Track A locally (fake Telegram + fake AI) |
 | `make run-track-b` | run Track B locally (real Telegram + fake AI) |
 | `make run-track-c` | run Track C locally (real Telegram + real AI) |
+| `make docker-build` | build the production image (SPA + Go) |
+| `make docker-up` | start the stack via `docker compose` |
+| `make docker-down` | stop the stack |
+| `make docker-logs` | tail the assistant container logs |
 
 ## Configuration
 
@@ -113,6 +117,60 @@ make run-track-a
 The first boot seeds the default category set (Politics, Technology, Business, Sports, World, Other) and the singleton settings row. The fake Telegram client reads from `.runtime/source-messages.yaml` and records sent digests to `.runtime/telegram-sent.jsonl`.
 
 Want to run a real Telegram bot (Track B) or a real OpenAI-compatible provider (Track C)? See the [quickstart](specs/001-telegram-news-assistant/quickstart.md) for full instructions, or just `make env-track-b` / `make env-track-c` to write the env files, export the required credentials, and `make run-track-b` / `make run-track-c`.
+
+## Docker deployment
+
+The service is shipped as a single multi-stage image: stage 1 builds the SvelteKit SPA, stage 2 compiles a static Go binary that embeds the SPA via `//go:embed`, stage 3 is a minimal Alpine runtime that runs as a non-root user. The resulting image is self-contained — no sidecars, no external DB, no init system.
+
+```bash
+# 1. Write a populated env file (do not commit a populated copy).
+cp deploy/assistant.env.example .runtime/assistant.env
+$EDITOR .runtime/assistant.env   # set TELEGRAM_BOT_TOKEN, AI_API_KEY, etc.
+
+# 2. Build the image and start the stack.
+make docker-up
+
+# 3. Tail the logs.
+make docker-logs
+
+# 4. Stop the stack (keeps the named volume with the SQLite DB).
+make docker-down
+```
+
+Equivalent direct commands:
+
+```bash
+docker build -t synapto/assistant:latest .
+docker compose up -d
+docker compose logs -f assistant
+```
+
+### What the image contains
+
+| Layer | Purpose |
+| --- | --- |
+| `node:20-alpine` (build) | `npm ci` + `npm run build` of the Svelte SPA → `frontend/build/` |
+| `golang:1.23-alpine` (build) | `go build` with the SPA copied into the `//go:embed` directory, `CGO_ENABLED=0`, trimmed + stripped binary |
+| `alpine:3.20` (runtime) | ca-certificates + tzdata + a non-root `assistant` user; the single binary + a healthcheck |
+
+The image is reproducible (no bind mounts during build), runs as UID 10001, and exposes a single port (8080). The SQLite file lives on a named volume (`synapto-data`) so it survives `docker compose down` (but not `docker compose down -v`).
+
+### Production checklist
+
+- **Never bake credentials into the image.** Use `env_file` (see `.runtime/assistant.env.example` for the full list) and keep the populated file out of git. The provided `.gitignore` already covers `.runtime/`, `.env`, and `*.env.local`.
+- **Put the admin panel behind a reverse proxy** (Caddy, nginx, or Traefik) that handles TLS and rate limiting, and set `ADMIN_PASSWORD` in the env file so the login page is enforced. Binding to `127.0.0.1:8080` and fronting it with a proxy on port 443 is the recommended topology.
+- **Back up the named volume.** `sqlite3 /var/lib/docker/volumes/synapto-data/_data/assistant.db ".backup '/path/to/snap.db'"` is enough; the schema is small and the digest history is the only state worth keeping.
+- **Watch `/api/health`.** The container's healthcheck pings it every 30s; external monitoring can do the same.
+- **Tune `DIGEST_INTERVAL`** for the traffic you actually see. The default 10 minutes is fine for typical news channels; if you follow busy channels, raise `AI_MAX_CONCURRENCY` and lower the interval.
+
+### One-shot smoke test
+
+If you just want to confirm the image boots without a stack file:
+
+```bash
+make docker-build
+make docker-run    # uses .runtime/assistant.env, binds 127.0.0.1:8080
+```
 
 ## Admin HTTP API
 

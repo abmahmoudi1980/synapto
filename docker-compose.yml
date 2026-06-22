@@ -1,0 +1,83 @@
+# Synapto — Telegram News Digest Assistant
+#
+# Single-service compose file for local + server deployments. The image is
+# built from the Dockerfile in this directory; the only stateful piece is
+# the SQLite database, which lives on a named volume so it survives
+# container restarts and image rebuilds.
+#
+# Usage:
+#   cp .runtime/track-b.env.example .runtime/assistant.env   # or write your own
+#   ${EDITOR:-vi} .runtime/assistant.env                       # set TELEGRAM_BOT_TOKEN, AI_API_KEY, etc.
+#   docker compose up -d --build
+#   docker compose logs -f assistant
+#   docker compose down
+#
+# All configuration is via env vars. See backend/internal/config/config.go
+# and the README for the full list. The defaults baked into the Dockerfile
+# (DB_PATH=/data/assistant.db, ADMIN_LISTEN_ADDR=0.0.0.0:8080) match the
+# volume + port mapping below.
+
+name: synapto
+
+services:
+  assistant:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Override at build time: --build-arg VERSION=$(git describe --tags --always)
+        VERSION: 0.1.0-dev
+    image: synapto/assistant:0.1.0-dev
+    container_name: synapto-assistant
+    restart: unless-stopped
+
+    # Bind the admin panel to localhost by default. For a server, expose
+    # it behind a reverse proxy (Caddy / nginx / Traefik) on a public
+    # interface and add ADMIN_PASSWORD for the login page. To bind on a
+    # LAN address instead, set ADMIN_LISTEN_ADDR in the env file.
+    ports:
+      - "127.0.0.1:8080:8080"
+
+    env_file:
+      - path: .runtime/assistant.env
+        required: false
+
+    environment:
+      # Defaults that match the in-container paths. Anything in the
+      # env_file above overrides these.
+      DB_PATH: /data/assistant.db
+      ADMIN_LISTEN_ADDR: 0.0.0.0:8080
+      LOG_LEVEL: info
+      TZ: UTC
+
+    volumes:
+      - synapto-data:/data
+
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+    # Resource limits. The service is small (single process, embedded
+    # SQLite, single subscriber). 256 MB is generous; the build image
+    # pulls the SPA in the first stage and the runtime image is ~25 MB.
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 256M
+        reservations:
+          cpus: "0.1"
+          memory: 32M
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  synapto-data:
+    name: synapto-data
