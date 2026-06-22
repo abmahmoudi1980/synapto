@@ -36,23 +36,28 @@ CREATE INDEX idx_posts_status_captured ON posts(status, captured_at DESC);
 CREATE INDEX idx_posts_dedup           ON posts(dedup_key);
 CREATE INDEX idx_posts_channel         ON posts(channel_id, source_msg_id DESC);
 
--- Link digest_items to the new persistent post table. UNIQUE(post_id)
--- enforces the one-post-one-digest-row invariant at the DB level.
+-- Link digest_items to the new persistent post table.
+-- Note: NO UNIQUE on post_id here. A post can legitimately appear in
+-- multiple digest_items rows across cycles (a re-sent post creates a
+-- new digest). The dedup of "send this post twice" is enforced at the
+-- posts.status level, not at the digest_items row level.
 ALTER TABLE digest_items ADD COLUMN post_id TEXT REFERENCES posts(id) ON DELETE CASCADE;
-CREATE UNIQUE INDEX idx_items_post ON digest_items(post_id);
 CREATE INDEX idx_items_post_id ON digest_items(post_id);
 
--- Backfill: one post per existing digest_item, status='sent' (or
--- 'send_failed') inferred from the parent digest row. This preserves
--- history: existing digests render identically because the new code
--- reads posts.summary instead of digest_items.summary.
-INSERT INTO posts (
+-- Backfill: one post per unique (channel_id, source_msg_id). The OLD
+-- schema allowed multiple digest_items rows for the same (channel,
+-- msg) — one per cycle that included the post. We dedupe with
+-- INSERT OR IGNORE and a deterministic post id keyed on (channel,
+-- msg), so the same post in N cycles collapses to one posts row.
+-- ORDER BY oldest-cycle-first so the representative (status,
+-- summary, etc.) is the most stable choice.
+INSERT OR IGNORE INTO posts (
   id, channel_id, source_msg_id, dedup_key, link, raw_text, media_kind, captured_at,
   status, category_id, summary, confidence, attempts, last_attempt_at, sent_at,
   telegram_msg_id, send_error, created_at, updated_at
 )
 SELECT
-  'post-' || di.cycle_id || '-' || di.channel_id || '-' || di.source_msg_id,
+  'post-' || di.channel_id || '-' || di.source_msg_id,
   di.channel_id, di.source_msg_id, di.dedup_key,
   'https://t.me/' || (SELECT handle FROM channels WHERE id = di.channel_id) || '/' || di.source_msg_id,
   di.raw_text, di.media_kind,
@@ -67,8 +72,13 @@ SELECT
   NULL,
   COALESCE((SELECT started_at FROM cycles WHERE id = di.cycle_id), datetime('now')),
   COALESCE((SELECT started_at FROM cycles WHERE id = di.cycle_id), datetime('now'))
-FROM digest_items di;
+FROM digest_items di
+ORDER BY (SELECT started_at FROM cycles WHERE id = di.cycle_id) ASC;
 
+-- Set digest_items.post_id for all rows. The post id is deterministic
+-- per (channel, source_msg_id) so this works for any number of cycles
+-- that contained the same post. The FK to posts is satisfied because
+-- the backfill above created a posts row for every (channel, msg).
 UPDATE digest_items
-SET post_id = 'post-' || cycle_id || '-' || channel_id || '-' || source_msg_id
+SET post_id = 'post-' || channel_id || '-' || source_msg_id
 WHERE post_id IS NULL;
