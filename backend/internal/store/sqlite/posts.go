@@ -231,6 +231,28 @@ func (s *Store) ListAllPosts(ctx context.Context, limit int) ([]store.Post, erro
 	return out, nil
 }
 
+// GetFirstTerminalByDedupKey returns the earliest post with the given
+// dedup_key and a terminal status ('sent' or 'filtered_out'), or
+// ErrNotFound. Used by the cycle to detect cross-channel content
+// duplicates: a freshly-fetched post whose text/media signature
+// matches a post already delivered (or dropped) via another channel
+// is marked filtered_out instead of being summarized and sent again.
+func (s *Store) GetFirstTerminalByDedupKey(ctx context.Context, dedupKey string) (store.Post, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var r postRow
+	err := s.db.GetContext(ctx, &r, `SELECT * FROM posts
+		WHERE dedup_key = ? AND status IN ('sent', 'filtered_out')
+		ORDER BY captured_at ASC LIMIT 1`, dedupKey)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return store.Post{}, store.ErrNotFound
+		}
+		return store.Post{}, err
+	}
+	return r.toEntity(), nil
+}
+
 // MarkSummarized transitions a post from 'received' to 'summarized'
 // and records summary + category + confidence. No-op if the post is
 // not in 'received' (e.g. it was already summarized in a previous cycle).

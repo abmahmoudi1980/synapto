@@ -120,7 +120,7 @@ func (c *Cycle) Run(ctx context.Context, windowStart, windowEnd time.Time) (stri
 		for _, p := range posts {
 			dKey := computeDedupKey(p.Text, string(p.MediaKind), p.Captions)
 			link := "https://t.me/" + ch.Handle + "/" + strconv.FormatInt(p.MessageID, 10)
-			_, created, upErr := c.deps.Posts.Upsert(ctx, store.Post{
+			newPost, created, upErr := c.deps.Posts.Upsert(ctx, store.Post{
 				ChannelID:   ch.ID,
 				SourceMsgID: p.MessageID,
 				DedupKey:    dKey,
@@ -134,13 +134,37 @@ func (c *Cycle) Run(ctx context.Context, windowStart, windowEnd time.Time) (stri
 				log.Warn("post upsert failed", "channel", ch.Handle, "msg_id", p.MessageID, "err", upErr)
 				continue
 			}
-			if created {
-				fetched++
-				_ = c.deps.Health.RecordEvent(ctx, store.OpEvent{
-					OccurredAt: time.Now().UTC(), Level: "info", Kind: "post.received",
-					CycleID: cycleID, Message: ch.Handle + "/" + strconv.FormatInt(p.MessageID, 10),
-				})
+			if !created {
+				// Re-observation of an already-known (channel, msg);
+				// the UNIQUE(channel_id, source_msg_id) constraint
+				// already collapsed it. Nothing to do.
+				continue
 			}
+			// Cross-channel content dedup. If another channel's post
+			// with the same dedup_key was already delivered (status
+			// 'sent') or intentionally dropped (status
+			// 'filtered_out'), mark this new post as filtered_out so
+			// it is not summarized and sent again. The new row stays
+			// in the posts table for audit (so the operator can see
+			// the second channel did forward the same content).
+			if existing, err := c.deps.Posts.GetFirstTerminalByDedupKey(ctx, dKey); err == nil && existing.ID != newPost.ID {
+				if mfErr := c.deps.Posts.MarkFiltered(ctx, newPost.ID); mfErr != nil {
+					log.Warn("mark duplicate filtered failed", "post_id", newPost.ID, "err", mfErr)
+				} else {
+					_ = c.deps.Health.RecordEvent(ctx, store.OpEvent{
+						OccurredAt: time.Now().UTC(), Level: "info", Kind: "post.duplicate",
+						CycleID: cycleID,
+						Message: ch.Handle + "/" + strconv.FormatInt(p.MessageID, 10) +
+							" duplicate of " + existing.ID,
+					})
+				}
+				continue
+			}
+			fetched++
+			_ = c.deps.Health.RecordEvent(ctx, store.OpEvent{
+				OccurredAt: time.Now().UTC(), Level: "info", Kind: "post.received",
+				CycleID: cycleID, Message: ch.Handle + "/" + strconv.FormatInt(p.MessageID, 10),
+			})
 		}
 		// Advance cursor to the latest post.
 		if len(posts) > 0 {

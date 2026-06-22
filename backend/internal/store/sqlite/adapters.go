@@ -167,6 +167,9 @@ func (a PostStore) ListByStatus(ctx context.Context, status store.PostStatus, li
 func (a PostStore) ListAll(ctx context.Context, limit int) ([]store.Post, error) {
 	return a.S.ListAllPosts(ctx, limit)
 }
+func (a PostStore) GetFirstTerminalByDedupKey(ctx context.Context, dedupKey string) (store.Post, error) {
+	return a.S.GetFirstTerminalByDedupKey(ctx, dedupKey)
+}
 func (a PostStore) MarkSummarized(ctx context.Context, id string, categoryID, summary string, confidence float64) error {
 	return a.S.MarkPostSummarized(ctx, id, categoryID, summary, confidence)
 }

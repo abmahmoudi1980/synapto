@@ -250,3 +250,108 @@ func TestPost_FilteredOutDoesNotAppearInDigest(t *testing.T) {
 		t.Errorf("expected 2 sent posts, got %d", sentCount)
 	}
 }
+
+// TestPost_CrossChannelDuplicate_FilteredOut is the regression test for
+// the "duplicate post" bug: when a newly-added channel reposts content
+// that has already been delivered via another channel, the cycle must
+// not summarize or send the duplicate. The new posts row is still
+// created (for audit), but is marked filtered_out immediately.
+func TestPost_CrossChannelDuplicate_FilteredOut(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+
+	const sharedText = "forwarded breaking news from primary source"
+
+	// Two channels in the seed, both with the same content.
+	seed := `[{"channel":"chan_alpha","messages":[
+		{"id":1,"text":"` + sharedText + `","media":"text"}
+	]},{"channel":"chan_bravo","messages":[
+		{"id":1,"text":"` + sharedText + `","media":"text"}
+	]}]`
+	tg, sentPath := newTestTelegram(t, seed)
+
+	// Phase 1: only channel alpha is registered. Run a cycle so the
+	// shared content is delivered exactly once.
+	if _, err := st.AddChannel(ctx, "chan_alpha", "Alpha"); err != nil {
+		t.Fatalf("add alpha: %v", err)
+	}
+	if _, err := st.UpdateSettings(ctx, store.SettingsUpdate{
+		TelegramSubscriberChat: int64Ptr(999),
+	}); err != nil {
+		t.Fatalf("update settings: %v", err)
+	}
+	cycle := digest.NewCycle(digest.CycleDeps{
+		Log:              logging.New("debug"),
+		Telegram:         tg,
+		Summarizer:       ai.NewFake(nil, "Uncategorized"),
+		Channels:         sqlite.ChannelStore{S: st},
+		Categories:       sqlite.CategoryStore{S: st},
+		Settings:         sqlite.SettingsStore{S: st},
+		Cycles:           sqlite.CycleStore{S: st},
+		Digests:          sqlite.DigestStore{S: st},
+		Health:           sqlite.HealthStore{S: st},
+		Posts:            sqlite.PostStore{S: st},
+		SubscriberChatID: 999,
+	})
+	if _, err := cycle.Run(ctx, time.Now().Add(-10*time.Minute), time.Now()); err != nil {
+		t.Fatalf("cycle 1: %v", err)
+	}
+	if sentAfterCycle1 := readSentFile(t, sentPath); sentAfterCycle1 != 1 {
+		t.Fatalf("after cycle 1: expected 1 sent message, got %d", sentAfterCycle1)
+	}
+
+	// Phase 2: add channel bravo (the "newly added channel" from the
+	// bug report). Its seed has the same text. Run another cycle; the
+	// bravo post must be marked filtered_out and Telegram must NOT
+	// receive a second message.
+	if _, err := st.AddChannel(ctx, "chan_bravo", "Bravo"); err != nil {
+		t.Fatalf("add bravo: %v", err)
+	}
+	if _, err := cycle.Run(ctx, time.Now().Add(-10*time.Minute), time.Now()); err != nil {
+		t.Fatalf("cycle 2: %v", err)
+	}
+
+	// Telegram must still have only one sent message (from cycle 1).
+	if sentAfterCycle2 := readSentFile(t, sentPath); sentAfterCycle2 != 1 {
+		t.Errorf("after cycle 2: expected 1 sent message (no duplicate), got %d", sentAfterCycle2)
+	}
+
+	// Verify the post rows: 1 sent (alpha), 1 filtered_out (bravo).
+	ps := sqlite.PostStore{S: st}
+	all, _ := ps.ListAll(ctx, 10)
+	if len(all) != 2 {
+		t.Fatalf("expected 2 post rows (one per channel), got %d", len(all))
+	}
+	var sentCount, filteredCount int
+	for _, p := range all {
+		switch p.Status {
+		case store.PostSent:
+			sentCount++
+		case store.PostFilteredOut:
+			filteredCount++
+		default:
+			t.Errorf("unexpected post status: %q (id=%s)", p.Status, p.ID)
+		}
+	}
+	if sentCount != 1 {
+		t.Errorf("expected exactly 1 sent post, got %d", sentCount)
+	}
+	if filteredCount != 1 {
+		t.Errorf("expected exactly 1 filtered_out post (the duplicate), got %d", filteredCount)
+	}
+
+	// The filtered post must be the bravo one. It must have a
+	// populated dedup_key (otherwise the dedup helper couldn't have
+	// matched it) and its summary must remain empty (it was never
+	// summarized).
+	for _, p := range all {
+		if p.Status == store.PostFilteredOut {
+			if p.Summary != "" {
+				t.Errorf("filtered duplicate must not be summarized, got summary=%q", p.Summary)
+			}
+			if p.DedupKey == "" {
+				t.Error("filtered duplicate must have a dedup_key for cross-channel lookup")
+			}
+		}
+	}
+}

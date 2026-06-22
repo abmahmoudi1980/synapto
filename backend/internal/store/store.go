@@ -326,6 +326,15 @@ type PostRepo interface {
 	// limit. Used by the admin history view.
 	ListAll(ctx context.Context, limit int) ([]Post, error)
 
+	// GetFirstTerminalByDedupKey returns the earliest post with the
+	// given dedup_key and a terminal status ('sent' or 'filtered_out'),
+	// or ErrNotFound. Used by the cycle to skip cross-channel
+	// duplicates: when a freshly-fetched post's content has already
+	// been delivered (or intentionally dropped) via another channel,
+	// the cycle marks the new post as filtered_out instead of
+	// summarizing and sending it again.
+	GetFirstTerminalByDedupKey(ctx context.Context, dedupKey string) (Post, error)
+
 	// MarkSummarized sets summary + category + confidence, and
 	// transitions status from 'received' to 'summarized'.
 	MarkSummarized(ctx context.Context, id string, categoryID, summary string, confidence float64) error
