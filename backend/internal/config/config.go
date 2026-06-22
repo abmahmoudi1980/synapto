@@ -56,8 +56,8 @@ func Load() (Config, error) {
 // or missing required values for the selected provider. It does NOT require
 // credentials when the provider is "fake" so that a fresh checkout boots.
 func (c Config) Validate() error {
-	if c.AIProvider != "fake" && c.AIProvider != "openai" {
-		return fmt.Errorf("config: unknown AI_PROVIDER %q (want fake or openai)", c.AIProvider)
+	if c.AIProvider != "fake" && c.AIProvider != "openai" && c.AIProvider != "anthropic" {
+		return fmt.Errorf("config: unknown AI_PROVIDER %q (want fake, openai, or anthropic)", c.AIProvider)
 	}
 	if c.AIProvider == "openai" {
 		if c.APIKey == "" {
@@ -68,6 +68,17 @@ func (c Config) Validate() error {
 		}
 		if c.AIModel == "" {
 			return fmt.Errorf("config: AI_MODEL is required when AI_PROVIDER=openai")
+		}
+	}
+	if c.AIProvider == "anthropic" {
+		if c.APIKey == "" {
+			return fmt.Errorf("config: AI_API_KEY is required when AI_PROVIDER=anthropic")
+		}
+		if c.AIBaseURL == "" {
+			return fmt.Errorf("config: AI_BASE_URL is required when AI_PROVIDER=anthropic")
+		}
+		if c.AIModel == "" {
+			return fmt.Errorf("config: AI_MODEL is required when AI_PROVIDER=anthropic")
 		}
 	}
 	if c.DigestInterval < time.Minute {

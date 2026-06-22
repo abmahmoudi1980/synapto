@@ -92,8 +92,12 @@ func run() error {
 	categories = append(categories, defaultCategoryNames...)
 	summarizer := newSummarizer(cfg, log, categories)
 
+	// Settings store handle. Used by the Telegram client to persist
+	// auto-discovered subscriber chat ids.
+	settingsStore := sqlite.SettingsStore{S: st}
+
 	// Telegram client.
-	tgClient, err := newTelegramClient(cfg, log)
+	tgClient, err := newTelegramClient(cfg, log, settingsStore)
 	if err != nil {
 		return fmt.Errorf("telegram client: %w", err)
 	}
@@ -165,7 +169,6 @@ func run() error {
 	// into the scheduler live. This satisfies SC-005/010 — the operator
 	// can change the digest interval from the admin panel without
 	// restarting the service.
-	settingsStore := sqlite.SettingsStore{S: st}
 	go watchSettings(ctx, settingsStore, sqlite.HealthStore{S: st}, scheduler, log, cfg.DigestInterval)
 
 	// Graceful shutdown on SIGINT/SIGTERM.
@@ -278,6 +281,24 @@ func newSummarizer(cfg config.Config, log *slog.Logger, categories []string) ai.
 			cfg.AIPerCallTimeout,
 			log,
 		)
+	case "anthropic":
+		key, err := resolveSecret("env:AI_API_KEY")
+		if err != nil {
+			log.Warn("ai: cannot resolve api key ref, falling back to fake",
+				"ref", "env:AI_API_KEY", "err", err)
+			return ai.NewFake(nil, "Uncategorized")
+		}
+		uncat := "Uncategorized"
+		log.Info("ai summarizer: anthropic", "model", cfg.AIModel, "base_url", cfg.AIBaseURL)
+		return ai.NewAnthropicSummarizer(
+			cfg.AIBaseURL,
+			cfg.AIModel,
+			key,
+			categories,
+			uncat,
+			cfg.AIPerCallTimeout,
+			log,
+		)
 	default:
 		log.Info("ai summarizer: fake", "rules", 0)
 		return ai.NewFake(nil, "Uncategorized")
@@ -304,7 +325,12 @@ func resolveSecret(ref string) (string, error) {
 }
 
 // newTelegramClient picks the Telegram implementation based on config.
-func newTelegramClient(cfg config.Config, log *slog.Logger) (telegram.Client, error) {
+// When TELEGRAM_BOT_TOKEN is set and TELEGRAM_USE_FAKE is false, it
+// returns a real Bot API client that long-polls getUpdates for
+// channel_post events. The onSubscriberChat callback persists the chat
+// id of the first private message the bot sees, so the operator does
+// not have to read it from getUpdates and patch the settings manually.
+func newTelegramClient(cfg config.Config, log *slog.Logger, settings store.SettingsRepo) (telegram.Client, error) {
 	if cfg.TelegramUseFake || cfg.TelegramBotToken == "" {
 		log.Info("telegram client: fake",
 			"seed", cfg.TelegramFakeSeed,
@@ -312,7 +338,23 @@ func newTelegramClient(cfg config.Config, log *slog.Logger) (telegram.Client, er
 		)
 		return telegram.NewFake(cfg.TelegramFakeSeed, cfg.TelegramFakeOut)
 	}
-	log.Info("telegram client: real (not yet implemented; using fake)", "token_set", cfg.TelegramBotToken != "")
-	// The real Bot API client is added in Phase 4 (T030). For now, use fake.
-	return telegram.NewFake(cfg.TelegramFakeSeed, cfg.TelegramFakeOut)
+	onChat := func(chatID int64) {
+		cur, err := settings.Get(context.Background())
+		if err != nil {
+			log.Warn("telegram real: cannot load settings for chat persistence", "err", err)
+			return
+		}
+		if cur.TelegramSubscriberChat == chatID {
+			return
+		}
+		v := chatID
+		_, err = settings.Update(context.Background(), store.SettingsUpdate{TelegramSubscriberChat: &v})
+		if err != nil {
+			log.Warn("telegram real: cannot persist subscriber chat", "err", err, "chat_id", chatID)
+			return
+		}
+		log.Info("telegram real: persisted subscriber chat", "chat_id", chatID)
+	}
+	log.Info("telegram client: real", "token_set", true)
+	return telegram.NewReal(cfg.TelegramBotToken, log, onChat)
 }

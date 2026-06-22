@@ -17,15 +17,20 @@ import (
 
 // CycleDeps bundles the dependencies a Cycle needs.
 type CycleDeps struct {
-	Log              *slog.Logger
-	Telegram         telegram.Client
-	Summarizer       ai.Summarizer
-	Channels         store.ChannelRepo
-	Categories       store.CategoryRepo
-	Settings         store.SettingsRepo
-	Cycles           store.CycleRepo
-	Digests          store.DigestRepo
-	Health           store.HealthRepo
+	Log        *slog.Logger
+	Telegram   telegram.Client
+	Summarizer ai.Summarizer
+	Channels   store.ChannelRepo
+	Categories store.CategoryRepo
+	Settings   store.SettingsRepo
+	Cycles     store.CycleRepo
+	Digests    store.DigestRepo
+	Health     store.HealthRepo
+	// SubscriberChatID is the initial chat id used as a fallback when
+	// the settings row has none. The cycle reads the live chat id from
+	// the settings row at the start of every run, so changes (e.g. an
+	// auto-discovered chat id from a /start message) take effect from
+	// the next cycle without a restart.
 	SubscriberChatID int64
 }
 
@@ -187,20 +192,24 @@ func (c *Cycle) Run(ctx context.Context, windowStart, windowEnd time.Time) (stri
 	}
 	sendStatus := store.SendOK
 	var telegramMsgID int64
-	if c.deps.SubscriberChatID != 0 && len(messages) > 0 {
+	chatID := settings.TelegramSubscriberChat
+	if chatID == 0 {
+		chatID = c.deps.SubscriberChatID // fallback to env-var default
+	}
+	if chatID != 0 && len(messages) > 0 {
 		for i, msg := range messages {
-			res, err := c.deps.Telegram.SendMessage(ctx, c.deps.SubscriberChatID, msg, "MarkdownV2")
+			res, err := c.deps.Telegram.SendMessage(ctx, chatID, msg, "MarkdownV2")
 			if err != nil {
 				log.Warn("send failed", "part", i, "err", err)
 				sendStatus = store.SendFailed
 				c.RecordTelegramEvent(ctx, "telegram.send.failed",
-					"part "+strconv.Itoa(i)+" to chat "+strconv.FormatInt(c.deps.SubscriberChatID, 10)+": "+err.Error())
+					"part "+strconv.Itoa(i)+" to chat "+strconv.FormatInt(chatID, 10)+": "+err.Error())
 				break
 			}
 			if res.Blocked {
 				sendStatus = store.SendBlocked
 				c.RecordTelegramEvent(ctx, "telegram.send.blocked",
-					"subscriber "+strconv.FormatInt(c.deps.SubscriberChatID, 10)+" blocked the bot")
+					"subscriber "+strconv.FormatInt(chatID, 10)+" blocked the bot")
 				break
 			}
 			if i == 0 {
