@@ -77,3 +77,18 @@ func (s *Store) UpdateSettings(ctx context.Context, u store.SettingsUpdate) (sto
 	cur.UpdatedAt = time.Now().UTC()
 	return cur, nil
 }
+
+// SyncAISettings overwrites the AI-related fields in the settings row
+// with the supplied values. The bot token ref and the
+// operator-tunable fields (digest interval, subscriber chat id,
+// uncategorized label) are left untouched. Called from main at boot
+// so the admin panel reflects the env file's ASSISTANT_AI_PROVIDER /
+// AI_MODEL / AI_BASE_URL / AI_API_KEY, regardless of whatever
+// hardcoded defaults the initial seed used.
+func (s *Store) SyncAISettings(ctx context.Context, provider, model, baseURL, keyRef string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE settings SET
+		ai_provider = ?, ai_model = ?, ai_base_url = ?, ai_api_key_ref = ?, updated_at = ?
+		WHERE id = 'singleton'`,
+		provider, model, baseURL, keyRef, nowISO())
+	return err
+}

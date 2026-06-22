@@ -84,6 +84,14 @@ func run() error {
 	if err := (sqlite.CategoryStore{S: st}).EnsureDefaults(ctx, defaultCategoryNames); err != nil {
 		return fmt.Errorf("ensure default categories: %w", err)
 	}
+	// Sync the AI-related settings with the live env. The settings row
+	// is seeded with hardcoded defaults; the env file is the source of
+	// truth for provider / model / base URL / API key ref, so refresh
+	// those on every boot. Operator-tunable fields (digest interval,
+	// subscriber chat, uncategorized label) are left as-is.
+	if err := st.SyncAISettings(ctx, cfg.AIProvider, cfg.AIModel, cfg.AIBaseURL, "env:AI_API_KEY"); err != nil {
+		return fmt.Errorf("sync ai settings: %w", err)
+	}
 
 	// AI summarizer. Used by the digest cycle. Category names are
 	// pulled from the seeded defaults so the system prompt lists the
@@ -127,7 +135,11 @@ func run() error {
 		Telegram:          tgClient,
 		SchedulerState:    schedulerStateFn,
 		TelegramReachable: func() bool { return true },
-		AIReachable:       func() bool { return cfg.AIProvider == "fake" },
+		// The AI summarizer is reachable when the provider is the
+		// always-on fake, or when a real provider is configured with
+		// a non-empty API key. This is a static configuration check;
+		// the test-ai endpoint issues a live probe on demand.
+		AIReachable:       func() bool { return cfg.AIProvider == "fake" || cfg.APIKey != "" },
 		StartedAt:         time.Now(),
 		AdminPassword:     cfg.AdminPassword,
 		Dev:               cfg.Dev,
