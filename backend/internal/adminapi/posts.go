@@ -1,6 +1,7 @@
 package adminapi
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"time"
@@ -83,12 +84,12 @@ func postToJSON(p store.Post, channels map[string]store.Channel, categories map[
 
 // loadPostLookups fetches the channel and category maps used to
 // enrich post JSON responses.
-func (s *Server) loadPostLookups(ctx contextLike) (map[string]store.Channel, map[string]store.Category, error) {
-	channels, err := s.deps.Channels.List(asCtx(ctx))
+func (s *Server) loadPostLookups(ctx context.Context) (map[string]store.Channel, map[string]store.Category, error) {
+	channels, err := s.deps.Channels.List(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
-	categories, err := s.deps.Categories.List(asCtx(ctx))
+	categories, err := s.deps.Categories.List(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -163,23 +164,3 @@ func (s *Server) registerPostRoutes(r chi.Router) {
 	r.Get("/posts", s.handleListPosts)
 	r.Get("/posts/{id}", s.handleGetPost)
 }
-
-// parseStatusFilter extracts a status= query param. Used by
-// /api/posts?status=send_failed. Returns the empty string when unset.
-func parseStatusFilter(r *http.Request) string {
-	return r.URL.Query().Get("status")
-}
-
-// contextLike is the small subset of context.Context that the post
-// helpers use. Allows the helpers to be called with any
-// context.Context-shaped value (e.g. *http.Request's r.Context()).
-type contextLike interface {
-	Deadline() (time.Time, bool)
-	Done() <-chan struct{}
-	Err() error
-	Value(key any) any
-}
-
-// asCtx narrows a contextLike to the value the repository interfaces
-// expect (which is the standard context.Context shape).
-func asCtx(c contextLike) contextLike { return c }

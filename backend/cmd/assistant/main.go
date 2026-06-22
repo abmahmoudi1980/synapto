@@ -132,6 +132,7 @@ func run() error {
 		Cycles:            sqlite.CycleStore{S: st},
 		Digests:           sqlite.DigestStore{S: st},
 		Health:            sqlite.HealthStore{S: st},
+		Posts:             sqlite.PostStore{S: st},
 		Telegram:          tgClient,
 		SchedulerState:    schedulerStateFn,
 		TelegramReachable: func() bool { return true },
