@@ -13,11 +13,12 @@ By the end of this quickstart, you will have:
 3. A real Telegram bot talking to a real chat (or a local Telegram fake) and delivering a real digest message.
 4. An end-to-end check that all 11 success criteria (SC-001…SC-011) are observable.
 
-The guide covers three validation tracks, in order of how quickly you can run them:
+The guide covers four validation tracks, in order of how quickly you can run them:
 
 - **Track A — Pure-local (no Telegram, no AI)**: 5 minutes. Validates the cycle, the store, the renderer, the admin API, and the SPA. Uses the in-process `fake` AI summarizer and a `fake` Telegram client.
-- **Track B — Real Telegram + fake AI**: 20 minutes. Validates the Telegram send path and the read path against `getChat`. Uses `@BotFather` and a public test channel.
+- **Track B — Real Telegram + fake AI**: 20 minutes. Validates the Telegram send path and the read path against `getChat`. Uses `@BotFather` and a public test channel the bot can join.
 - **Track C — Real Telegram + real AI**: 30 minutes. Validates end-to-end with a real OpenAI-compatible provider.
+- **Track P — Public preview + real AI (no bot membership)**: 15 minutes. Validates the alternative read path that uses `t.me/s/<handle>` so the bot does not need to be a member of the channel. Uses a real bot token only for the **send** side; reads work for any public channel.
 
 ## Prerequisites
 
@@ -26,8 +27,8 @@ The guide covers three validation tracks, in order of how quickly you can run th
 - **make** (any GNU make).
 - **curl** and **jq** for hitting the admin API.
 - A POSIX shell (Git Bash on Windows, or WSL). The Makefile uses `cp` and `mkdir -p`; if you are on native Windows PowerShell, use the `make` from Git for Windows or run the commands manually.
-- A Telegram account (Track B and C only) and a channel the bot can read.
-- An OpenAI-compatible API key (Track C only).
+- A Telegram account (Track B, C, and P for the send side) and a channel the bot can read (Track B and C only).
+- An OpenAI-compatible API key (Track C and P only).
 
 ## 0. Clone and build (all tracks)
 
@@ -278,11 +279,100 @@ rm -rf .runtime
 
 ---
 
+---
+
+## Track P — Public preview read path (≈ 15 min)
+
+This track exercises the **preview** read source (`TELEGRAM_SOURCE=preview`). Reads happen via `t.me/s/<handle>`, so the bot does **not** need to be a member of the channel — useful for public channels you don't administer. The bot is still required for the **send** path, so you need a real token and your chat id (just like Track B/C).
+
+### P1. Set up the bot (one time)
+
+Follow Track B's **B1** and **B2** steps to create a bot via `@BotFather` and capture your chat id.
+
+### P2. Start the service with the preview source
+
+```bash
+cat > .runtime/assistant.env <<EOF
+ASSISTANT_AI_PROVIDER=openai
+DIGEST_INTERVAL=1m
+ADMIN_LISTEN_ADDR=127.0.0.1:8080
+DB_PATH=./.runtime/assistant.db
+TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+TELEGRAM_SUBSCRIBER_CHAT=${TELEGRAM_SUBSCRIBER_CHAT}
+TELEGRAM_SOURCE=preview
+AI_BASE_URL=${AI_BASE_URL}
+AI_MODEL=${AI_MODEL}
+AI_API_KEY=${AI_API_KEY}
+LOG_LEVEL=info
+EOF
+chmod 600 .runtime/assistant.env
+
+set -a; source .runtime/assistant.env; set +a
+./bin/assistant &
+SERVICE_PID=$!
+sleep 2
+```
+
+> The key line is `TELEGRAM_SOURCE=preview`. The boot log will show
+> `telegram client: preview (public web)` instead of `real`.
+
+### P3. Add a public channel you do not admin
+
+The bot does not need to be a member. Pick any public channel whose posts you want to monitor. The admin API will call `t.me/s/<handle>` (via the new `HTTPPreview` client) to validate the channel exists; if the preview page returns 200, the channel is added.
+
+```bash
+curl -sS -X POST http://127.0.0.1:8080/api/channels \
+  -H 'Content-Type: application/json' \
+  -d '{"handle":"some_public_channel"}' | jq .
+```
+
+A `201 Created` confirms the channel is now registered.
+
+### P4. Wait for one cycle
+
+Because the interval is `1m`, within ~70 seconds the service runs a cycle. Verify:
+
+```bash
+# 1. The cycle produced items.
+curl -sS 'http://127.0.0.1:8080/api/cycles?limit=1' | jq '.cycles[0] | {status, input_msg_count, output_items, degraded}'
+# Expected: { "status": "succeeded", "input_msg_count": 10..20, "output_items": 10..20, "degraded": false }
+
+# 2. The per-channel cursor advanced past the first page of the preview.
+curl -sS 'http://127.0.0.1:8080/api/channels' | jq '.channels[0] | {handle, last_observed_at, last_error}'
+
+# 3. The bot delivered a digest message to your chat (check Telegram).
+```
+
+> The preview walker is capped at 20 pages per fetch (~400 posts). On a
+> channel with thousands of posts, the first cycle's `input_msg_count`
+> is whatever fits in 20 pages; subsequent cycles return only the
+> genuinely-new posts after the cursor.
+
+### P5. Validate the success criteria that apply here
+
+| SC | How to validate in Track P | Expected |
+|---|---|---|
+| **SC-005** (channel change reflected next cycle) | Add a second public channel via the admin API, wait one cycle | new channel appears in the next digest |
+| **SC-006** (category change reflected next cycle) | Rename a category, wait one cycle | next digest uses the new heading |
+| **SC-008** (no double-deliver on restart) | `kill $SERVICE_PID; ./bin/assistant &` mid-window, wait two cycles | exactly one digest per window in `digests` |
+| **SC-010** (config survives restart) | Restart the service, check channel list and settings | unchanged |
+
+The preview path does **not** exercise SC-001/003/004/007/009 (those require Track B/C for delivery latency / AI quality / degraded mode), but it does prove the full read → AI → render → send pipeline for public channels.
+
+### P6. Tear down
+
+```bash
+kill $SERVICE_PID; wait $SERVICE_PID 2>/dev/null
+rm -rf .runtime
+```
+
+---
+
 ## Mapping back to the spec
 
 | Spec item | Validated by |
 |---|---|
-| FR-001…FR-006 (channels, fetch, interval, AI, category) | Track A steps A3–A6, Track B step B5 |
+| FR-001…FR-006 (channels, fetch, interval, AI, category) | Track A steps A3–A6, Track B step B5, Track P steps P3–P4 |
 | FR-007, FR-008 (deliver vs suppress) | Track A step A7 (SC-002, SC-011) |
 | FR-009 (dedup) | Track A with two channels sharing the same forwarded message in the seed YAML |
 | FR-010 (size limit) | Track A with 60+ seeded messages, inspect `digests.rendered_text` length |
@@ -291,8 +381,8 @@ rm -rf .runtime
 | FR-014 (history) | All tracks, `GET /api/cycles` and the History page |
 | FR-015 (failure surfacing) | Track B step B6 (SC-015-style) and Track C SC-007 |
 | FR-016 (restart safety) | SC-008 in Track A step A7 |
-| FR-017 (non-text) | Track A seed YAML with `media: image` and a caption |
-| FR-018 (pluggable AI) | Switching `ASSISTANT_AI_PROVIDER` between `fake` and `openai` without code changes |
+| FR-017 (non-text) | Track A seed YAML with `media: image` and a caption; Track P fetches public media |
+| FR-018 (pluggable AI + pluggable read source) | Switching `ASSISTANT_AI_PROVIDER` between `fake` and `openai` and `TELEGRAM_SOURCE` between `longpoll` and `preview` without code changes |
 | All success criteria SC-001…SC-011 | covered above per track |
 
 ## What this quickstart does NOT do

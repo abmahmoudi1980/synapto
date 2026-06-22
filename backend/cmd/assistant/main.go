@@ -330,6 +330,10 @@ func resolveSecret(ref string) (string, error) {
 // channel_post events. The onSubscriberChat callback persists the chat
 // id of the first private message the bot sees, so the operator does
 // not have to read it from getUpdates and patch the settings manually.
+//
+// TELEGRAM_SOURCE=preview swaps the read path to the public web
+// preview (t.me/s/<handle>), so the bot does not need to be a member
+// of the channel. SendMessage still uses the Bot API either way.
 func newTelegramClient(cfg config.Config, log *slog.Logger, settings store.SettingsRepo) (telegram.Client, error) {
 	if cfg.TelegramUseFake || cfg.TelegramBotToken == "" {
 		log.Info("telegram client: fake",
@@ -337,6 +341,20 @@ func newTelegramClient(cfg config.Config, log *slog.Logger, settings store.Setti
 			"out", cfg.TelegramFakeOut,
 		)
 		return telegram.NewFake(cfg.TelegramFakeSeed, cfg.TelegramFakeOut)
+	}
+	source := strings.ToLower(strings.TrimSpace(cfg.TelegramSource))
+	if source == "" {
+		source = "longpoll"
+	}
+	if source != "longpoll" && source != "preview" {
+		return nil, fmt.Errorf("config: unknown TELEGRAM_SOURCE %q (want longpoll or preview)", cfg.TelegramSource)
+	}
+	if source == "preview" {
+		log.Info("telegram client: preview (public web)",
+			"preview_base", cfg.TelegramPreviewBase,
+			"token_set", true,
+		)
+		return telegram.NewHTTPPreviewWithBases(cfg.TelegramBotToken, cfg.TelegramPreviewBase, ""), nil
 	}
 	onChat := func(chatID int64) {
 		cur, err := settings.Get(context.Background())

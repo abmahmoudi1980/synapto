@@ -79,7 +79,9 @@ func Render(in RenderInput) []string {
 	var lines []line
 	for _, name := range catOrder {
 		g := cats[name]
-		lines = append(lines, line{text: "# " + g.name})
+		// Escape the category name so user-supplied names (e.g. "AI & ML")
+		// and the wrapping # stay well-formed under MarkdownV2.
+		lines = append(lines, line{text: "# " + escapeMarkdownV2(g.name)})
 		for _, it := range g.items {
 			lines = append(lines, line{text: formatItemLine(it, in.Degraded)})
 		}
@@ -129,26 +131,33 @@ func Render(in RenderInput) []string {
 	return messages
 }
 
-// formatHeader returns the top line of a digest message.
+// formatHeader returns the top line of a digest message. The timestamp
+// is escaped because the date format contains hyphens (e.g. "2026-06-22")
+// which are MarkdownV2 reserved.
 func formatHeader(windowEnd time.Time, continued bool) string {
 	ts := windowEnd.UTC().Format("2006-01-02 15:04 UTC")
+	tsEsc := escapeMarkdownV2(ts)
 	if continued {
-		return "📰 News digest (continued) — " + ts
+		return "📰 News digest (continued) — " + tsEsc
 	}
-	return "📰 News digest — " + ts
+	return "📰 News digest — " + tsEsc
 }
 
-// formatFooter returns the closing line of a digest message.
+// formatFooter returns the closing line of a digest message. The cycle id
+// and status are escaped so the parens in "degraded (AI unavailable)" and
+// any future dynamic content stay valid under MarkdownV2.
 func formatFooter(cycleID string, itemCount int, degraded bool) string {
 	short := cycleID
 	if len(short) > 8 {
 		short = short[:8]
 	}
+	shortEsc := escapeMarkdownV2(short)
 	status := "ok"
 	if degraded {
 		status = "degraded (AI unavailable)"
 	}
-	return "— cycle " + short + " · " + itoa(itemCount) + " items · " + status
+	statusEsc := escapeMarkdownV2(status)
+	return "— cycle " + shortEsc + " · " + itoa(itemCount) + " items · " + statusEsc
 }
 
 // formatItemLine renders one bullet line: "• <summary>  _(handle)_" or

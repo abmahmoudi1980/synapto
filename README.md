@@ -8,13 +8,20 @@ A single-binary service that fetches new messages from a set of public Telegram 
 
 Every digest cycle runs the same loop:
 
-1. **Fetch** new messages from each selected channel since the last successful cycle (per-channel cursor, no backfill).
+1. **Fetch** new messages from each selected channel since the last successful cycle (per-channel cursor, no double-deliver).
 2. **Deduplicate** items forwarded into multiple channels within the same window.
 3. **Summarize + categorize** each item through a pluggable AI summarizer (`fake` or any OpenAI-compatible endpoint).
 4. **Render** a single Telegram message grouped by category, respecting Telegram's size limits (split or top-N with a "more" marker when needed).
 5. **Send** the digest from the designated bot to your chat. Cycles with no new items are silently suppressed.
 
 If the AI provider is unavailable, the cycle degrades gracefully to raw headlines + categories instead of skipping. Failures (Telegram API errors, blocked bot, channel gone private, scheduling slips) are recorded and surfaced in the admin panel. Restart safety guarantees no window is double-delivered or skipped.
+
+### Two ways to fetch channel posts
+
+The read side is pluggable via `TELEGRAM_SOURCE`:
+
+- **`longpoll`** (default) — the bot long-polls `getUpdates` for `channel_post` events. The bot must be a member of every channel you want to monitor. Real-time, no rate limits beyond Telegram's.
+- **`preview`** — the service reads the public web preview at `t.me/s/<handle>` and walks paginated pages newest-to-oldest. **The bot does not need to be a member of the channel** — useful for public channels you don't administer. Unofficial surface; rate-limited to 1 req/handle/sec. Send side still uses the Bot API.
 
 ## Stack
 
@@ -95,6 +102,8 @@ All config is read from environment variables (see [`backend/internal/config/con
 | `DIGEST_INTERVAL` | `10m` | cycle cadence (min 1m, max 24h) |
 | `TELEGRAM_BOT_TOKEN` | _(empty)_ | bot token from `@BotFather` |
 | `TELEGRAM_SUBSCRIBER_CHAT` | `0` | your chat id to deliver digests to |
+| `TELEGRAM_SOURCE` | `longpoll` | `longpoll` (bot must be a member) or `preview` (reads `t.me/s/<handle>`, no membership required) |
+| `TELEGRAM_PREVIEW_BASE` | `https://t.me` | base URL for the preview source (override for tests / mirrors) |
 | `TELEGRAM_USE_FAKE` | `false` | force the in-process fake Telegram client |
 | `TELEGRAM_FAKE_SEED` | `./.runtime/source-messages.yaml` | seed file for the fake client |
 | `TELEGRAM_FAKE_OUT` | `./.runtime/telegram-sent.jsonl` | where the fake client records sent messages |

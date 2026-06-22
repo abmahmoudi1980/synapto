@@ -8,8 +8,9 @@ This guide mirrors the three validation tracks from [`quickstart.md`](./quicksta
 | Track | What it validates | Needs | Time |
 |---|---|---|---|
 | **A** | Cycle, store, renderer, admin API, SPA | Nothing external | ~5 min |
-| **B** | Real Telegram send + read paths | Bot token + public channel | ~20 min |
-| **C** | Full end-to-end incl. real AI + degraded mode | Bot token + OpenAI key | ~30 min |
+| **B** | Real Telegram send + read paths (long-poll) | Bot token + public channel (bot must be added) | ~20 min |
+| **C** | Full end-to-end incl. real AI + degraded mode | Bot token + OpenAI key + public channel | ~30 min |
+| **P** | Public preview read path (no bot membership) | Bot token + OpenAI key (channel public, no membership required) | ~15 min |
 
 ---
 
@@ -507,6 +508,90 @@ Remove-Item -Recurse -Force .\.runtime -ErrorAction SilentlyContinue
 
 ---
 
+## Track P — Public preview read path (≈ 15 min) **NEW**
+
+This track exercises the `TELEGRAM_SOURCE=preview` read path. Reads use `t.me/s/<handle>`, so the bot does **not** need to be a member of the channel — useful for public channels you don't administer. The bot is still required for the send side, so you need a real token and your chat id.
+
+### P1. Create a bot and capture your chat id (one time)
+
+Follow Track B's **B1** and **B2** steps.
+
+### P2. Write the env file with the preview source
+
+```powershell
+$env:TELEGRAM_BOT_TOKEN = "123456:ABC..."
+$env:TELEGRAM_SUBSCRIBER_CHAT = "111222333"
+$env:AI_BASE_URL = "https://api.openai.com/v1"
+$env:AI_MODEL = "gpt-4o-mini"
+$env:AI_API_KEY = "sk-..."
+
+New-Item -ItemType Directory -Path .runtime -Force | Out-Null
+@"
+ASSISTANT_AI_PROVIDER=openai
+DIGEST_INTERVAL=1m
+ADMIN_LISTEN_ADDR=127.0.0.1:8080
+DB_PATH=./.runtime/assistant.db
+TELEGRAM_BOT_TOKEN=$env:TELEGRAM_BOT_TOKEN
+TELEGRAM_SUBSCRIBER_CHAT=$env:TELEGRAM_SUBSCRIBER_CHAT
+TELEGRAM_SOURCE=preview
+AI_BASE_URL=$env:AI_BASE_URL
+AI_MODEL=$env:AI_MODEL
+AI_API_KEY=$env:AI_API_KEY
+LOG_LEVEL=info
+"@ | Set-Content -Path .\.runtime\assistant.env -Encoding ASCII
+```
+
+> The key line is `TELEGRAM_SOURCE=preview`. The boot log will show
+> `telegram client: preview (public web)` instead of `real`.
+
+### P3. Start the service
+
+```powershell
+Get-Content .\.runtime\assistant.env | ForEach-Object {
+    if ($_ -match '^\s*([^=]+)=(.*)$') { Set-Item -Path "env:$($Matches[1])" -Value $Matches[2] }
+}
+$proc = Start-Process -FilePath ".\bin\assistant.exe" -PassThru -NoNewWindow
+Start-Sleep -Seconds 3
+Write-Host "Service PID: $($proc.Id)"
+```
+
+### P4. Add a public channel you don't admin
+
+The bot does not need to be a member. Pick any public channel; the admin API will hit `t.me/s/<handle>` (via the new `HTTPPreview` client) to validate it.
+
+```powershell
+Invoke-RestMethod -Uri "http://127.0.0.1:8080/api/channels" `
+    -Method Post -ContentType "application/json" -Body '{"handle":"some_public_channel"}' | ConvertTo-Json
+```
+
+### P5. Wait for one cycle and verify
+
+```powershell
+Start-Sleep -Seconds 70
+$latest = (Invoke-RestMethod -Uri "http://127.0.0.1:8080/api/cycles?limit=1").cycles[0]
+$latest | Select-Object status, input_msg_count, output_items, degraded | ConvertTo-Json
+```
+
+**Expected**: `status: succeeded`, `input_msg_count: 10..20` (preview's first page), `output_items: 10..20`, `degraded: false`. You should have received a real Telegram message from the bot in your personal chat.
+
+> The preview walker is capped at 20 pages per fetch (~400 posts). On
+> channels with thousands of posts, the first cycle returns whatever
+> fits in 20 pages; subsequent cycles return only genuinely-new posts
+> after the cursor advances.
+
+### P6. Validate persistence and restart safety
+
+Same shape as Track A's A11 (SC-008, SC-010) — cursors survive restart, no double-deliver. The channel list, settings, and categories are unchanged across a service restart.
+
+### P7. Tear down
+
+```powershell
+Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force .\.runtime -ErrorAction SilentlyContinue
+```
+
+---
+
 ## Track C — Real Telegram + real AI (≈ 30 min)
 
 Same as Track B, with the AI summarizer pointed at a real OpenAI-compatible endpoint. Add these to your env:
@@ -608,12 +693,12 @@ make lint     # golangci-lint (or go vet) + eslint/prettier
 | **SC-002** (no message when no items) | A11 | A |
 | **SC-003** (real summaries, not verbatim) | C1 | C |
 | **SC-004** (95% cycle success over 7 days) | needs a soak run — out of scope for this guide | — |
-| **SC-005** (channel change next cycle) | A11 | A |
-| **SC-006** (category change next cycle) | A11 | A |
+| **SC-005** (channel change next cycle) | A11, P6 | A, P |
+| **SC-006** (category change next cycle) | A11, P6 | A, P |
 | **SC-007** (degraded mode on AI outage) | C2 | C |
-| **SC-008** (no double-deliver on restart) | A11 | A |
-| **SC-009** (admin panel < 2s) | A4 | A, B, C |
-| **SC-010** (config survives restart) | A11 | A |
+| **SC-008** (no double-deliver on restart) | A11, P6 | A, P |
+| **SC-009** (admin panel < 2s) | A4 | A, B, C, P |
+| **SC-010** (config survives restart) | A11, P6 | A, P |
 | **SC-011** (single message ≤ 50 items) | A11 | A |
 
 ## Troubleshooting

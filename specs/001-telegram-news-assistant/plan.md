@@ -30,7 +30,7 @@ Phase 1 of the user assistant service is a Telegram news digest assistant. The b
 
 **Constraints**:
 - Single subscriber, single designated bot (per spec assumption).
-- The Telegram Bot API limits reading channel history to messages posted after the bot joined; the service therefore tracks a per-channel cursor (`last_seen_message_id`) and never tries to backfill older history.
+- The Telegram Bot API limits reading channel history to messages posted after the bot joined; the service therefore tracks a per-channel cursor (`last_seen_message_id`) and never tries to backfill older history via the Bot API. A second read source (the public web preview at `t.me/s/<handle>`, selected via `TELEGRAM_SOURCE=preview`) relaxes this for public channels — see `research.md` R7.
 - Telegram rate limits (≈30 messages/sec global, lower per-chat) must be respected by the send side; a single-message digest is the expected output (FR-007, FR-010, SC-011).
 - AI provider latency: each call to the summarizer is treated as a hard timeout; on failure the cycle degrades to a raw-headline digest (FR-005, FR-007, edge case "AI provider outage").
 - No external secret store; credentials are read from env vars / a local secrets file and never written to the SQLite DB in plaintext (only a non-secret reference and a fingerprint).

@@ -7,7 +7,7 @@ description: "Task list for the Telegram News Digest Assistant feature"
 **Input**: Design documents from `/specs/001-telegram-news-assistant/`
 - `plan.md` (required): tech stack, libraries, project structure
 - `spec.md` (required): user stories US1–US5
-- `research.md`: R1–R6 decisions (Bot API, AI interface, SQLite, embedded SPA, in-process scheduler)
+- `research.md`: R1–R7 decisions (Bot API, AI interface, SQLite, embedded SPA, in-process scheduler, pluggable read source)
 - `data-model.md`: SQL schema and repository interfaces
 - `contracts/admin-api.md`, `contracts/telegram-render.md`, `contracts/ai-summarizer.md`
 - `quickstart.md`: Tracks A (local), B (real Telegram), C (real AI)

@@ -24,7 +24,7 @@ func TestRender_SingleMessageTwoCategories(t *testing.T) {
 	if len(msgs) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(msgs))
 	}
-	want := `📰 News digest — 2026-06-21 07:20 UTC
+	want := `📰 News digest — 2026\-06\-21 07:20 UTC
 
 # Technology
 • Telegram rolls out scheduled messages in channels  \_\(telegram\)
@@ -69,7 +69,7 @@ func TestRender_DegradedMode(t *testing.T) {
 	if !strings.Contains(msgs[0], "⚠️") {
 		t.Errorf("degraded mode should use ⚠️ bullet: %s", msgs[0])
 	}
-	if !strings.Contains(msgs[0], "degraded (AI unavailable)") {
+	if !strings.Contains(msgs[0], `degraded \(AI unavailable\)`) {
 		t.Errorf("footer should mention degraded: %s", msgs[0])
 	}
 }

@@ -16,6 +16,12 @@ type Config struct {
 	TelegramFakeOut        string `env:"TELEGRAM_FAKE_OUT" envDefault:"./.runtime/telegram-sent.jsonl"`
 	TelegramFakeSeed       string `env:"TELEGRAM_FAKE_SEED" envDefault:"./.runtime/source-messages.yaml"`
 	TelegramUseFake        bool   `env:"TELEGRAM_USE_FAKE" envDefault:"false"`
+	// TelegramSource selects how the client reads channel posts:
+	//   "longpoll" (default) - Bot API getUpdates; bot must be a member
+	//   "preview"           - public web preview t.me/s/<handle>; no membership required
+	// SendMessage always uses the Bot API regardless of source.
+	TelegramSource      string `env:"TELEGRAM_SOURCE" envDefault:"longpoll"`
+	TelegramPreviewBase string `env:"TELEGRAM_PREVIEW_BASE" envDefault:"https://t.me"`
 
 	// AI
 	AIProvider       string        `env:"ASSISTANT_AI_PROVIDER" envDefault:"fake"`

@@ -136,6 +136,29 @@ The default implementation targets the **OpenAI Chat Completions API** (works fo
 
 ---
 
+## R7. Pluggable read source: long-poll vs public web preview (added after v1)
+
+**Problem**: The Bot API long-poll path (R1) requires the bot to be a member of every channel the subscriber wants to monitor. Operators running a "news aggregator" service often follow public channels they do not administer and cannot invite the bot to (R1 §Consequences). For these, the long-poll path silently produces `skipped_no_items` cycles with no diagnostic.
+
+**Decision**: Add a second `telegram.Client` implementation, `HTTPPreview`, that reads the public web preview at `t.me/s/<handle>` and walks its paginated pages. The bot membership is **not** required for the read path. `SendMessage` still uses the Bot API (the bot is still needed to deliver the digest to the subscriber's chat). The choice is exposed as `TELEGRAM_SOURCE={longpoll,preview}` (default: `longpoll`). The cycle, the cursor, the deduper, the AI summarizer, the renderer, the admin API, and the data model are all unchanged.
+
+**Rationale**:
+- The `telegram.Client` interface (`GetChat`, `FetchNewPosts`, `SendMessage`, `Close`) was designed in R2 with pluggability in mind; adding a second implementation is a small, contained change.
+- The public web preview is a public surface that any web browser can read, so the "you need to be a member" constraint of the Bot API does not apply. Cursors still work: each cycle asks for posts with `MessageID > last_seen_msg_id`; the page walker stops as soon as it hits the boundary.
+- Sending the digest still goes through the Bot API, so the long-poll-vs-preview choice is purely a read-path swap.
+
+**Alternatives considered**:
+- **MTProto (`gotd/td`) user client**: rejected in R1 (ToS / session storage). Still rejected here.
+- **A third-party RSS bridge service**: rejected — adds an external dependency and a ToS surface; defeats the "single binary, no sidecars" goal.
+- **A scraper that renders the page in a headless browser**: overkill; the public preview is plain HTML with stable markup.
+
+**Consequences**:
+- The web preview is an **unofficial** surface. t.me may change its markup or rate-limit. The implementation rate-limits itself (1 request per handle per second, with a 20-page cap per fetch to keep cycles bounded) and parses defensively: any structural change that breaks the regex yields zero posts rather than a crash, surfacing the issue in `cycle.skipped_no_items` and `op_events`.
+- The preview cannot read private channels (the public preview is not served for them). Long-poll remains the only path for private channels and is still the default.
+- Private channels (and operators who want a more reliable source) should keep using `TELEGRAM_SOURCE=longpoll` and arrange for the bot to be added to the channel by an admin.
+
+---
+
 ## Cross-cutting design decisions
 
 - **Configuration loading**: env-driven via `caarlos0/env/v10`. A `.env` file (gitignored) is allowed for local dev. Required envs: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_SUBSCRIBER_CHAT_ID`, `AI_BASE_URL`, `AI_API_KEY`, `AI_MODEL`, `ADMIN_LISTEN_ADDR` (default `:8080`), `DIGEST_INTERVAL` (default `10m`), `DB_PATH` (default `./assistant.db`).
