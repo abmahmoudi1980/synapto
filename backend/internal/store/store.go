@@ -133,12 +133,53 @@ type DigestItem struct {
 	ChannelID   string
 	CategoryID  string // empty when uncategorized
 	SourceMsgID int64
+	PostID      string // back-reference to the persistent posts row (added in 0002)
 	DedupKey    string
 	RawText     string
 	MediaKind   MediaKind
 	Summary     string
 	Confidence  float64 // 0 when unknown
 	Ordering    int
+}
+
+// PostStatus is the lifecycle state of a single source-channel post.
+// See specs/001-telegram-news-assistant/data-model.md for the
+// transition diagram and the cycle that drives state changes.
+type PostStatus string
+
+const (
+	PostReceived         PostStatus = "received"          // fetched, needs summarization
+	PostSummarized       PostStatus = "summarized"        // AI returned; ready to bundle
+	PostIncludedInDigest PostStatus = "included_in_digest" // bundled into a digest row that hasn't been ack'd yet
+	PostSent             PostStatus = "sent"              // Telegram ack'd
+	PostSendFailed       PostStatus = "send_failed"       // Telegram returned an error; will retry on next cycle
+	PostFilteredOut      PostStatus = "filtered_out"      // AI returned ErrInvalidInput; intentionally dropped
+	PostDead             PostStatus = "dead"              // operator-marked; not retried (future use)
+)
+
+// Post is one Telegram channel post, durable across cycles. One row per
+// (channel_id, source_msg_id) — the unique constraint at the SQL level
+// prevents duplicates.
+type Post struct {
+	ID            string
+	ChannelID     string
+	SourceMsgID   int64
+	DedupKey      string
+	Link          string
+	RawText       string
+	MediaKind     MediaKind
+	CapturedAt    time.Time
+	Status        PostStatus
+	CategoryID    string // empty when uncategorized
+	Summary       string // empty until AI returns
+	Confidence    float64
+	Attempts      int
+	LastAttemptAt time.Time // zero when never tried
+	SentAt        time.Time // zero when not yet sent
+	TelegramMsgID int64     // 0 when not yet sent
+	SendError     string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }
 
 // DigestListEntry is a row in the history list view: the cycle plus a few
@@ -247,4 +288,61 @@ type HealthRepo interface {
 	Snapshot(ctx context.Context) (Health, error)
 	RecordEvent(ctx context.Context, e OpEvent) error
 	RecentEvents(ctx context.Context, limit int) ([]OpEvent, error)
+}
+
+// PostRepo persists one row per unique channel post. The cycle uses it
+// to (1) dedupe fetches across cycles via Upsert, (2) drive the
+// summarize step from ListReceived, (3) drive the send step from
+// ListUnsent, and (4) record per-post send outcomes.
+type PostRepo interface {
+	// Upsert inserts a post if (channel_id, source_msg_id) is new, or
+	// returns the existing row untouched. The bool result is true when
+	// the row was newly created.
+	Upsert(ctx context.Context, p Post) (Post, bool, error)
+
+	// Get returns one post by id, or ErrNotFound.
+	Get(ctx context.Context, id string) (Post, error)
+
+	// GetByChannelMsg returns one post by (channel, source_msg_id), or
+	// ErrNotFound.
+	GetByChannelMsg(ctx context.Context, channelID string, sourceMsgID int64) (Post, error)
+
+	// ListReceived returns posts that still need summarization,
+	// status='received', ordered by captured_at ASC. Limit caps the
+	// result (caller-supplied, typically 200 per cycle).
+	ListReceived(ctx context.Context, limit int) ([]Post, error)
+
+	// ListUnsent returns posts the cycle should bundle this round:
+	// status IN ('summarized','send_failed','included_in_digest') AND
+	// (last_attempt_at IS NULL OR last_attempt_at < cutoff). Ordered
+	// by captured_at ASC, capped at limit.
+	ListUnsent(ctx context.Context, cutoff time.Time, limit int) ([]Post, error)
+
+	// ListByStatus returns posts filtered by status, newest first,
+	// for the admin view.
+	ListByStatus(ctx context.Context, status PostStatus, limit int) ([]Post, error)
+
+	// ListAll returns posts in reverse captured_at order, capped at
+	// limit. Used by the admin history view.
+	ListAll(ctx context.Context, limit int) ([]Post, error)
+
+	// MarkSummarized sets summary + category + confidence, and
+	// transitions status from 'received' to 'summarized'.
+	MarkSummarized(ctx context.Context, id string, categoryID, summary string, confidence float64) error
+
+	// MarkIncluded transitions N posts from 'summarized' to
+	// 'included_in_digest' and bumps last_attempt_at to now. Called
+	// when the cycle creates a digest row that hasn't been sent yet.
+	MarkIncluded(ctx context.Context, postIDs []string) error
+
+	// MarkSent transitions a post to 'sent' and records the Telegram
+	// message id + sent_at + attempts+1.
+	MarkSent(ctx context.Context, id string, telegramMsgID int64) error
+
+	// MarkSendFailed transitions a post to 'send_failed', increments
+	// attempts, and stores the error message.
+	MarkSendFailed(ctx context.Context, id string, errMsg string) error
+
+	// MarkFiltered sets status='filtered_out' (ErrInvalidInput).
+	MarkFiltered(ctx context.Context, id string) error
 }

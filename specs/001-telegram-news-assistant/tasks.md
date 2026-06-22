@@ -21,6 +21,38 @@ description: "Task list for the Telegram News Digest Assistant feature"
 - **[US#] label is required** on tasks in Phases 3–7 (user story phases) and is **omitted** on Setup, Foundational, and Polish phases.
 - Include exact file paths in descriptions.
 
+## Phase 9: Persistent Post Queue (post-queue, FR-019…FR-023)
+
+**Purpose**: Replace the per-cycle in-memory dedup with a persistent `posts` table so the service can recover from mid-cycle crashes and auto-retry failed sends. Each unique Telegram channel post becomes one row with its own lifecycle (`received → summarized → included_in_digest → sent` or `send_failed`). See `data-model.md` "Post lifecycle" and `research.md` R8.
+
+### Tests for the post queue
+
+> **NOTE**: Write these tests FIRST, ensure they FAIL before implementation.
+
+- [X] T066 [P] `posts_upsert_test.go` — Upsert creates a new row; second call with same `(channel, source_msg_id)` returns the existing row (`created=false`), no duplicate
+- [X] T067 [P] `posts_lifecycle_test.go` — `MarkSummarized → MarkIncluded → MarkSent` walks a post through the full state machine; `attempts` increments; `send_error` cleared on success
+- [X] T068 [P] `cycle_post_crash_test.go` — a post left in `included_in_digest` (process crash between bundle and send) is picked up by the next cycle and sent
+- [X] T069 [P] `cycle_send_failed_test.go` — a post in `send_failed` is re-bundled by the next cycle and sent successfully (auto-retry)
+- [X] T070 [P] `dedup_cross_channel_test.go` — same forwarded message id in two different channels → two distinct post rows; the unique constraint is per-channel
+- [X] T071 [P] `admin_posts_test.go` — `GET /api/posts` and `GET /api/posts/{id}` round-trip the persistent post rows
+
+### Implementation for the post queue
+
+- [X] T072 [P] Migration `backend/internal/store/migrations/0002_posts_queue.sql` — `posts` table, `digest_items.post_id` column + UNIQUE index, backfill from existing `digest_items`
+- [X] T073 [P] `Post` struct + `PostStatus` enum + `PostRepo` interface in `backend/internal/store/store.go`
+- [X] T074 [P] `PostStore` adapter in `backend/internal/store/sqlite/adapters.go`; concrete implementation in `backend/internal/store/sqlite/posts.go`
+- [X] T075 [P] Update `DigestItem` in `store.go` and `digestItemRow` + `AddDigestItem` in `backend/internal/store/sqlite/digests.go` to persist `post_id`
+- [X] T076 [US1] Rewrite `internal/digest/cycle.go` to use `PostRepo.Upsert` for fetch, `ListReceived` for summarize, `ListUnsent` for bundle, `MarkSent` / `MarkSendFailed` for per-post send outcome. Auto-retry is implicit: any post with `status IN ('summarized','send_failed','included_in_digest')` is bundled on the next cycle.
+- [X] T077 [US1] Wire `sqlite.PostStore{S: st}` into `CycleDeps` in `cmd/assistant/main.go`
+- [X] T078 [US5] New admin endpoints in `backend/internal/adminapi/posts.go`: `GET /api/posts?status=&limit=` and `GET /api/posts/{id}`. Register the routes in `server.go`.
+- [X] T079 [P] New event kinds in `cycle.go`: `post.received` on Upsert-created, `post.sent` on MarkSent, `post.send_failed` on MarkSendFailed
+- [X] T080 [P] Update existing tests in `backend/tests/digest_cycle_test.go` to pass `Posts: sqlite.PostStore{S: st}` to `digest.NewCycle(digest.CycleDeps{...})`
+- [X] T081 [P] Update existing tests in `backend/internal/adminapi/channels_test.go` (`newTestServer`) and `auth_test.go` (`newAuthServer`) to pass `Posts: sqlite.PostStore{S: st}` in `adminapi.Deps`
+
+**Checkpoint**: Post-queue change is fully functional — every Telegram post is a durable row, failed sends are retried automatically, and the admin panel exposes the queue via `GET /api/posts`.
+
+---
+
 ## Path Conventions
 
 - **Backend (Go)**: `backend/cmd/...`, `backend/internal/...`, `backend/migrations/...`, `backend/tests/...`

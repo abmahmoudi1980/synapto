@@ -106,6 +106,8 @@ The subscriber (and operator) can review past delivered digests and the underlyi
 - **AI config from env not reflected in panel** *(admin UX)**: When the cycle is configured at startup with a real AI provider, the operator-visible settings panel must show the live env values (provider, model, base URL, key ref) — not the hardcoded defaults that seed the row. The startup path must sync the AI fields from env to the `settings` row on every boot, while leaving the operator-tunable fields (digest interval, subscriber chat, uncategorized label) untouched.
 - **Empty category set**: The subscriber removes all categories. The system must still deliver a digest (grouped as "Uncategorized" or top-level) rather than failing.
 - **Configuration changes mid-cycle**: The operator changes the interval or the channel list while a digest is being prepared. The system must use a consistent snapshot for the current cycle and apply the change from the next cycle onward.
+- **Cycle crash after fetch, before send**: The process dies between persisting a `posts` row (status='received') and the Telegram send. On restart, the next cycle picks the post up via `status='received'` (or `'included_in_digest'` if it was marked that way) and continues. No post is silently lost.
+- **Send failure recovery**: A cycle's Telegram send returns an error mid-batch. The posts in the failed message MUST be marked `send_failed`, the next cycle MUST re-include them, and the subscriber MUST eventually receive them without operator action.
 
 ## Requirements *(mandatory)*
 
@@ -129,12 +131,18 @@ The subscriber (and operator) can review past delivered digests and the underlyi
 - **FR-016**: The service MUST NOT double-deliver a digest window after a restart, and MUST NOT skip a window on restart, even when the restart happens mid-window.
 - **FR-017**: The service MUST handle non-text source messages (images, video, voice) by producing a useful entry in the digest (caption, transcript when available, or an explicit "non-text item" marker) rather than silently dropping them.
 - **FR-018**: The service MUST treat the AI provider as a pluggable component so that the underlying model/vendor can be changed without changing the rest of the system. The exact provider is not fixed by this spec.
+- **FR-019**: The service MUST persist one row per unique Telegram channel post in a `posts` table, independent of any cycle. The unique key is `(channel_id, source_msg_id)`; a second observation of the same post MUST NOT create a second row.
+- **FR-020**: The `posts` table MUST include a `link` field holding the Telegram permalink (`https://t.me/<handle>/<source_msg_id>`) for each post.
+- **FR-021**: Each post row MUST carry a `status` field reflecting its lifecycle: `received` (just fetched), `summarized` (AI returned), `included_in_digest` (bundled, send pending), `sent` (Telegram ack'd), `send_failed` (Telegram errored, will retry), `filtered_out` (AI rejected), or `dead` (operator-marked, not retried).
+- **FR-022**: The cycle MUST send every post with `status IN ('summarized','send_failed','included_in_digest')` on each run, and MUST auto-retry any post whose previous send failed. There is no manual retry step.
+- **FR-023**: Each `digest_items` row MUST reference its source `post_id` (UNIQUE), so a single post appears in at most one digest row across the whole history.
 
 ### Key Entities *(include if feature involves data)*
 
 - **Subscriber**: The single person who receives digests and selects channels/categories. Attributes: identity, Telegram chat identifier, selected channels, custom categories (overlays on defaults), digest interval preference.
 - **Source Channel**: A public Telegram channel the subscriber wants monitored. Attributes: handle, display name, last-seen message identifier, last-observed timestamp, status (active / inaccessible / banned).
 - **Source Message**: A message observed in a source channel during a digest window. Attributes: channel reference, Telegram message identifier, captured text/media-reference, captured timestamp, dedup key, raw payload snapshot (the version used for summarization).
+- **Persistent Post**: A durable per-message row in the `posts` table. One row per unique `(channel_id, source_msg_id)`. Carries the source message attributes above plus the per-post lifecycle (`status`, `summary`, `category`, `attempts`, `sent_at`, `telegram_msg_id`, `send_error`, `link`). Posts are bundled into digests at send time; the cycle auto-retries posts whose send failed in a previous cycle. See `data-model.md` "Post queue".
 - **Digest Item**: The summarized, categorized unit that goes into a digest. Attributes: source-message reference, summary text, assigned category, confidence (if available), order within its category.
 - **Category**: A label used to group digest items. Attributes: name, ordering weight, default-or-custom flag. The service ships with a default set; the subscriber can add, rename, and remove.
 - **Digest Cycle**: One scheduled execution of the digest loop. Attributes: cycle identifier, window start/end timestamps, status (pending / succeeded / failed / degraded), input message count, output digest reference.

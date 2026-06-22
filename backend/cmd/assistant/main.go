@@ -157,6 +157,7 @@ func run() error {
 		Cycles:           sqlite.CycleStore{S: st},
 		Digests:          sqlite.DigestStore{S: st},
 		Health:           sqlite.HealthStore{S: st},
+		Posts:            sqlite.PostStore{S: st},
 		SubscriberChatID: cfg.TelegramSubscriberChat,
 	})
 	scheduler := digest.NewScheduler(cycle, cfg.DigestInterval, sqlite.CycleStore{S: st}, log)

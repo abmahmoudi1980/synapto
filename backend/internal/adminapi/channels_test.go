@@ -45,6 +45,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *sqlite.Store) {
 		Cycles:     sqlite.CycleStore{S: st},
 		Digests:    sqlite.DigestStore{S: st},
 		Health:     sqlite.HealthStore{S: st},
+		Posts:      sqlite.PostStore{S: st},
 		Telegram:   tg,
 		StartedAt:  time.Now(),
 	})

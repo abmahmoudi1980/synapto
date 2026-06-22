@@ -178,3 +178,26 @@ The default implementation targets the **OpenAI Chat Completions API** (works fo
 - **Multi-subscriber / multi-tenant**: out of scope; the SQLite schema is intentionally minimal and would need `subscriber_id` columns added throughout if revisited.
 - **OCR / ASR for non-text messages**: out of scope for phase 1; non-text items are emitted with a `[Image]` / `[Video]` / `[Voice]` marker and the original caption if any (FR-017).
 - **Horizontal scaling**: out of scope; the single-process design is a hard constraint and the scheduler's mutex model is the right shape for a single node.
+
+---
+
+## R8. Why a persistent post queue instead of in-memory dedup
+
+**Decision**: Replace the per-cycle in-memory `Dedup()` map with a persistent `posts` table keyed on `(channel_id, source_msg_id)`. The cycle reads from this table for the summarize and send steps; the per-channel `last_seen_msg_id` cursor remains as a fetch-side optimization, but the post-row `status` field is the source of truth for the lifecycle.
+
+**Rationale**:
+- The per-cycle dedup map is lost on restart. A cycle that fetches a post, advances the cursor, and then crashes before delivering the digest will never re-fetch that post (the cursor is already past it) — the post is silently lost.
+- A persistent row per post makes the lifecycle observable at the row level: an operator can answer "what's the status of post 4711?" with a SQL query.
+- A failed Telegram send leaves the post in `send_failed`. The next cycle re-bundles it via `ListUnsent` and tries again. No manual retry step.
+- Cross-channel content dedup (FR-009, a forwarded post into two channels) still works via the `dedup_key` column on the new `posts` table; the dedup happens at upsert time on the second channel's row.
+
+**Alternatives considered**:
+- **Keep in-memory dedup, snapshot the dedup map to disk on every cycle**: rejected because it adds a serialization step and still loses the "which post went into which cycle" linkage.
+- **Tie post identity to a `digests` row**: rejected because it couples the durable post to the cycle's transient state.
+
+**Consequences carried into the design**:
+- New `posts` table in migration `0002_posts_queue.sql`, plus a backfill of one post per existing `digest_items` row.
+- New `PostRepo` interface in `internal/store`, SQLite implementation in `internal/store/sqlite/posts.go`.
+- Cycle pipeline rewritten: fetch → `Upsert` (received); summarize → `MarkSummarized`; bundle → `MarkIncluded`; send → `MarkSent` / `MarkSendFailed`.
+- New admin endpoints: `GET /api/posts?status=` and `GET /api/posts/{id}`. The per-post view is what makes the queue observable to the operator.
+- The unique constraint on `(channel_id, source_msg_id)` is the new write-side safety net; the per-channel cursor remains the read-side optimization.

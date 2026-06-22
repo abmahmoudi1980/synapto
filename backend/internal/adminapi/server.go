@@ -30,6 +30,7 @@ type Deps struct {
 	Cycles     store.CycleRepo
 	Digests    store.DigestRepo
 	Health     store.HealthRepo
+	Posts      store.PostRepo
 
 	// Telegram is the client used to validate channel handles on add.
 	// May be nil in tests; the handler skips Telegram validation when nil.
@@ -126,6 +127,7 @@ func (s *Server) buildRouter() chi.Router {
 		s.registerCategoryRoutes(r)
 		s.registerSettingsRoutes(r)
 		s.registerHistoryRoutes(r)
+		s.registerPostRoutes(r)
 	})
 
 	// SPA fallback (serves frontend/build/ via //go:embed).

@@ -142,6 +142,47 @@ func (a CursorStore) Advance(ctx context.Context, channelID string, toMsgID int6
 	return a.S.AdvanceCursor(ctx, channelID, toMsgID, time.Now().UTC())
 }
 
+// PostStore adapts *Store to store.PostRepo. See posts.go for the
+// per-method implementations.
+type PostStore struct{ S *Store }
+
+func (a PostStore) Upsert(ctx context.Context, p store.Post) (store.Post, bool, error) {
+	return a.S.UpsertPost(ctx, p)
+}
+func (a PostStore) Get(ctx context.Context, id string) (store.Post, error) {
+	return a.S.GetPost(ctx, id)
+}
+func (a PostStore) GetByChannelMsg(ctx context.Context, channelID string, sourceMsgID int64) (store.Post, error) {
+	return a.S.GetPostByChannelMsg(ctx, channelID, sourceMsgID)
+}
+func (a PostStore) ListReceived(ctx context.Context, limit int) ([]store.Post, error) {
+	return a.S.ListReceivedPosts(ctx, limit)
+}
+func (a PostStore) ListUnsent(ctx context.Context, cutoff time.Time, limit int) ([]store.Post, error) {
+	return a.S.ListUnsentPosts(ctx, cutoff, limit)
+}
+func (a PostStore) ListByStatus(ctx context.Context, status store.PostStatus, limit int) ([]store.Post, error) {
+	return a.S.ListPostsByStatus(ctx, status, limit)
+}
+func (a PostStore) ListAll(ctx context.Context, limit int) ([]store.Post, error) {
+	return a.S.ListAllPosts(ctx, limit)
+}
+func (a PostStore) MarkSummarized(ctx context.Context, id string, categoryID, summary string, confidence float64) error {
+	return a.S.MarkPostSummarized(ctx, id, categoryID, summary, confidence)
+}
+func (a PostStore) MarkIncluded(ctx context.Context, postIDs []string) error {
+	return a.S.MarkPostsIncluded(ctx, postIDs)
+}
+func (a PostStore) MarkSent(ctx context.Context, id string, telegramMsgID int64) error {
+	return a.S.MarkPostSent(ctx, id, telegramMsgID)
+}
+func (a PostStore) MarkSendFailed(ctx context.Context, id string, errMsg string) error {
+	return a.S.MarkPostSendFailed(ctx, id, errMsg)
+}
+func (a PostStore) MarkFiltered(ctx context.Context, id string) error {
+	return a.S.MarkPostFiltered(ctx, id)
+}
+
 // Compile-time assertions that the adapters satisfy the interfaces.
 var (
 	_ store.ChannelRepo  = ChannelStore{}
@@ -151,4 +192,5 @@ var (
 	_ store.DigestRepo   = DigestStore{}
 	_ store.HealthRepo   = HealthStore{}
 	_ store.CursorRepo   = CursorStore{}
+	_ store.PostRepo     = PostStore{}
 )

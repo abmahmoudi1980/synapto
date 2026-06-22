@@ -320,16 +320,75 @@ Return the most recent operational events (newest first), drawn from the `op_eve
 | `kind` | `level` | Meaning |
 |---|---|---|
 | `cycle.start` | info | New cycle is created and fetches begin. |
-| `cycle.fetched` | info | Fetches completed (`raw` and `deduped` counts in `context`). |
+| `cycle.fetched` | info | Fetches completed (`received` count in `context`). |
 | `cycle.summarized` | info | AI summarization completed (`items` and `degraded` in `context`). |
 | `cycle.success` | info | Cycle terminal: `status='succeeded'`. |
 | `cycle.degraded` | warn | Cycle terminal: `status='degraded'` (AI fell back to raw headlines). |
 | `cycle.skipped_no_items` | info | Cycle terminal: `status='skipped_no_items'`. |
 | `cycle.failed` | error | Cycle terminal: `status='failed'`. |
+| `post.received` | info | A new post row was created (`Upsert` returned `created=true`). |
+| `post.sent` | info | A post row was marked `sent` after a successful Telegram send. |
+| `post.send_failed` | warn | A post row was marked `send_failed` after a Telegram send error. |
 | `telegram.send.failed` | warn | The sendMessage call returned an error (network / API 4xx-5xx). |
 | `telegram.send.blocked` | warn | Telegram returned a "bot blocked by the user" / Forbidden response. |
 | `telegram.send.no_recipient` | warn | The cycle had items to send but `telegram_subscriber_chat` and `TELEGRAM_SUBSCRIBER_CHAT` are both 0. The digest is still recorded with `send_status='failed'` so the operator can see what would have been sent. Set the env var, `PATCH /api/settings`, or switch to `TELEGRAM_SOURCE=longpoll` to auto-discover the chat id from `/start`. |
 | `settings.changed` | info | The operator-tunable settings row was PATCHed. |
+
+---
+
+## Posts (post-queue)
+
+The persistent post queue makes every Telegram channel message a durable
+row with its own lifecycle. The cycle reads from `posts` to drive the
+summarize and send steps; the admin panel can list and inspect posts
+via the endpoints below.
+
+#### `GET /api/posts?status=&limit=`
+
+List recent posts, optionally filtered by status. Default `limit=100`,
+capped at 500.
+
+| Query param | Values | Default |
+|---|---|---|
+| `status` | `received` \| `summarized` \| `included_in_digest` \| `sent` \| `send_failed` \| `filtered_out` \| `dead` | (any) |
+| `limit` | int | 100 |
+
+**Response 200**:
+```json
+{
+  "posts": [
+    {
+      "id": "…",
+      "channel_id": "…",
+      "channel_handle": "durov",
+      "source_msg_id": 12345,
+      "link": "https://t.me/durov/12345",
+      "raw_text": "Telegram announced a new privacy feature.",
+      "media_kind": "text",
+      "captured_at": "2026-06-22T07:20:14Z",
+      "status": "sent",
+      "category_id": "…",
+      "category_name": "Technology",
+      "summary": "Telegram announced a new privacy feature for groups.",
+      "confidence": 0.87,
+      "attempts": 1,
+      "last_attempt_at": "2026-06-22T07:20:09Z",
+      "sent_at": "2026-06-22T07:20:09Z",
+      "telegram_msg_id": 4711,
+      "send_error": null
+    }
+  ],
+  "count": 1
+}
+```
+
+#### `GET /api/posts/{id}`
+
+Get a single post by id.
+
+**Response 200**: the same `post` shape as in the list endpoint (no wrapping `{posts: [...]}`).
+
+**Error codes**: `post_not_found`.
 
 ---
 

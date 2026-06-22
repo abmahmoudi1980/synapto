@@ -1,7 +1,7 @@
 # Data Model: Telegram News Digest Assistant
 
 **Feature**: 001-telegram-news-assistant
-**Date**: 2026-06-21
+**Date**: 2026-06-21 (post-queue added 2026-06-22)
 **Purpose**: Translate the Key Entities in `spec.md` into a concrete relational schema, repository interfaces, and state-transition rules. This is the contract the Go `internal/store` package implements.
 
 ## Storage engine
@@ -99,24 +99,58 @@ CREATE TABLE digest_items (
   channel_id      TEXT NOT NULL REFERENCES channels(id) ON DELETE RESTRICT,
   category_id     TEXT REFERENCES categories(id) ON DELETE SET NULL, -- nullable when no category matches
   source_msg_id   INTEGER NOT NULL,            -- Telegram message id
+  post_id         TEXT REFERENCES posts(id) ON DELETE CASCADE,  -- back-reference to the persistent post (post-queue)
   dedup_key       TEXT NOT NULL,               -- sha256(normalized_text) | sha256(media_signature)
   raw_text        TEXT NOT NULL,               -- captured text, may be empty for media-only
   media_kind      TEXT NOT NULL,               -- 'text' | 'image' | 'video' | 'voice' | 'other'
   summary         TEXT NOT NULL,               -- the summary that went into the digest
   confidence      REAL,                         -- 0..1 from AI, nullable
   ordering        INTEGER NOT NULL DEFAULT 0,  -- per-category order
-  UNIQUE (cycle_id, channel_id, source_msg_id)
+  UNIQUE (cycle_id, channel_id, source_msg_id),
+  UNIQUE (post_id)
 );
 CREATE INDEX idx_items_cycle ON digest_items(cycle_id, ordering);
 CREATE INDEX idx_items_channel ON digest_items(channel_id);
 CREATE INDEX idx_items_dedup ON digest_items(dedup_key);
+CREATE INDEX idx_items_post_id ON digest_items(post_id);
+
+-- Persistent per-post queue. One row per unique (channel_id,
+-- source_msg_id); the cycle reads from here for summarize and send
+-- steps. Status drives the lifecycle. See "Post queue" below.
+CREATE TABLE posts (
+  id              TEXT PRIMARY KEY,                  -- UUID
+  channel_id      TEXT NOT NULL REFERENCES channels(id) ON DELETE RESTRICT,
+  source_msg_id   INTEGER NOT NULL,                  -- Telegram message id
+  dedup_key       TEXT NOT NULL,
+  link            TEXT NOT NULL,                     -- https://t.me/<handle>/<source_msg_id>
+  raw_text        TEXT NOT NULL,
+  media_kind      TEXT NOT NULL,                     -- 'text' | 'image' | 'video' | 'voice' | 'other'
+  captured_at     TEXT NOT NULL,                     -- ISO-8601 UTC
+  status          TEXT NOT NULL,                     -- see post-queue state diagram
+  category_id     TEXT REFERENCES categories(id) ON DELETE SET NULL,
+  summary         TEXT,                              -- nullable until AI runs
+  confidence      REAL,
+  attempts        INTEGER NOT NULL DEFAULT 0,
+  last_attempt_at TEXT,                              -- nullable
+  sent_at         TEXT,                              -- nullable
+  telegram_msg_id INTEGER,                           -- nullable
+  send_error      TEXT,                              -- nullable
+  created_at      TEXT NOT NULL,
+  updated_at      TEXT NOT NULL,
+  CHECK (status IN ('received','summarized','included_in_digest','sent','send_failed','filtered_out','dead')),
+  UNIQUE (channel_id, source_msg_id)
+);
+CREATE INDEX idx_posts_status          ON posts(status);
+CREATE INDEX idx_posts_status_captured ON posts(status, captured_at DESC);
+CREATE INDEX idx_posts_dedup           ON posts(dedup_key);
+CREATE INDEX idx_posts_channel         ON posts(channel_id, source_msg_id DESC);
 
 -- A short audit log of operational events (last N rows, ring-buffered)
 CREATE TABLE op_events (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   occurred_at TEXT NOT NULL,
   level       TEXT NOT NULL,                   -- 'info' | 'warn' | 'error'
-  kind        TEXT NOT NULL,                   -- e.g. 'cycle.start', 'cycle.success', 'telegram.send.failed'
+  kind        TEXT NOT NULL,                   -- e.g. 'cycle.start', 'cycle.success', 'telegram.send.failed', 'post.received', 'post.sent'
   cycle_id    TEXT,                            -- nullable
   message     TEXT NOT NULL,
   context     TEXT                             -- JSON blob, nullable
@@ -173,6 +207,26 @@ type CursorRepo interface {                                                     
     Advance(ctx context.Context, channelID string, toMsgID int64) error
 }
 
+// PostRepo persists one row per unique channel post. The cycle uses it
+// to (1) dedupe fetches across cycles via Upsert, (2) drive the
+// summarize step from ListReceived, (3) drive the send step from
+// ListUnsent, and (4) record per-post send outcomes. See "Post queue"
+// below.
+type PostRepo interface {
+    Upsert(ctx context.Context, p Post) (Post, bool, error)
+    Get(ctx context.Context, id string) (Post, error)
+    GetByChannelMsg(ctx context.Context, channelID string, sourceMsgID int64) (Post, error)
+    ListReceived(ctx context.Context, limit int) ([]Post, error)
+    ListUnsent(ctx context.Context, cutoff time.Time, limit int) ([]Post, error)
+    ListByStatus(ctx context.Context, status PostStatus, limit int) ([]Post, error)
+    ListAll(ctx context.Context, limit int) ([]Post, error)
+    MarkSummarized(ctx context.Context, id string, categoryID, summary string, confidence float64) error
+    MarkIncluded(ctx context.Context, postIDs []string) error
+    MarkSent(ctx context.Context, id string, telegramMsgID int64) error
+    MarkSendFailed(ctx context.Context, id string, errMsg string) error
+    MarkFiltered(ctx context.Context, id string) error
+}
+
 type HealthRepo interface {
     Snapshot(ctx context.Context) (Health, error)                                  -- last success, last failure, per-channel status
     RecordEvent(ctx context.Context, e OpEvent) error                              -- also writes to op_events
@@ -186,13 +240,14 @@ type HealthRepo interface {
 |---|---|---|
 | **Subscriber** | implicit (one row in `settings` with `telegram_subscriber_chat`) | single-subscriber phase 1 |
 | **Source Channel** | `channels` | `status`, `last_seen_msg_id`, `last_observed_at`, `last_error` capture the lifecycle |
-| **Source Message** | `digest_items.raw_text` + `source_msg_id` + `dedup_key` + `media_kind` | captured at fetch time, never re-fetched |
-| **Digest Item** | `digest_items` (after summarization) | the summary text and assigned category |
+| **Persistent Post** | `posts` | one row per unique `(channel_id, source_msg_id)`; carries source message + lifecycle + per-send outcome |
+| **Source Message** | `posts.raw_text` + `posts.source_msg_id` + `posts.dedup_key` + `posts.media_kind` + `posts.link` | captured at fetch time, never re-fetched; persists across cycles |
+| **Digest Item** | `digest_items` (with `post_id` FK back to `posts`) | the per-cycle summary text, category, ordering, and the post it came from |
 | **Category** | `categories` | `is_default` flag protects shipped categories from deletion |
 | **Digest Cycle** | `cycles` | one row per scheduled execution, including skipped / failed ones |
 | **Digest Record** | `digests` (1:1 with successful or degraded cycles) | the exact text that was sent to Telegram |
 | **Operator Configuration** | `settings` (single row) | credentials are referenced by name, not stored |
-| **Operational Health Snapshot** | derived view over `cycles` + `channels` + `op_events` | computed on read by `HealthRepo.Snapshot` |
+| **Operational Health Snapshot** | derived view over `cycles` + `channels` + `op_events` + `posts` | computed on read by `HealthRepo.Snapshot` |
 
 ## State transitions
 
@@ -259,6 +314,38 @@ If no recipient is configured when the cycle has items to send, the digest is st
 - `EnsureDefaults` is idempotent: at first boot it inserts the shipped set (Politics, Technology, Business, Sports, World, Other) marked `is_default = 1`; on subsequent boots it is a no-op.
 - `Remove` of a default category returns an error surfaced in the admin panel: "Cannot remove a built-in category; rename it instead."
 
+### Post lifecycle (added in migration `0002_posts_queue.sql`)
+
+Each unique `(channel_id, source_msg_id)` is one row in `posts`. The status field drives the cycle. The cycle's summarize step pulls `received` rows; the send step pulls `summarized` / `send_failed` / `included_in_digest` rows. After a successful Telegram ack the row is `sent` and is excluded from future bundles automatically.
+
+```
+   (no row) -- fetch step: Upsert
+        │
+        ▼
+   received -- AI step: MarkSummarized ─► summarized
+        │                                  │
+        │ -- AI rejected (ErrInvalidInput)  │ -- MarkIncluded (bundle) ─► included_in_digest
+        ▼                                  │                              │
+   filtered_out                            │                              │
+                                           │           ┌── send OK ◄──────┤
+                                           │           ▼                  │
+                                           │         sent                 │
+                                           │                              │
+                                           │           ┌── send failed ◄──┤
+                                           │           ▼                  │
+                                           │      send_failed ────────────┘  (auto-retry on next cycle)
+                                           │
+                                           └── MarkFiltered (only valid from 'received')
+```
+
+- **received → summarized** on a successful AI call (`MarkSummarized`).
+- **received → filtered_out** when the AI returns `ErrInvalidInput` (`MarkFiltered`).
+- **summarized → included_in_digest** when the cycle bundles the post into a digest row that has not been sent yet (`MarkIncluded`). The unique constraint on `digest_items.post_id` makes this the last stop before send: at most one digest row may reference a given post.
+- **included_in_digest → sent** on a successful Telegram send (`MarkSent`); the row's `telegram_msg_id` and `sent_at` are populated, `attempts` increments.
+- **included_in_digest → send_failed** on a Telegram error or blocked-subscriber response (`MarkSendFailed`). The next cycle re-bundles the post via `ListUnsent` and retries (auto-retry; no operator action).
+- A post in `send_failed` that is later moved to `sent` clears its `send_error` column (set to NULL by `MarkSent`).
+- A post in `send_failed` after `attempts` consecutive cycles is never auto-marked `dead` in phase 1. (Future: a max-attempts threshold + `MarkDead`.)
+
 ## Validation rules (enforced in the store layer)
 
 - **Channel handle**: must match `^[A-Za-z][A-Za-z0-9_]{3,31}[A-Za-z0-9]$`; leading `@` is stripped before storage and comparison.
@@ -282,7 +369,7 @@ If no recipient is configured when the cycle has items to send, the digest is st
 | Kind | When |
 |---|---|
 | `cycle.start` | A new cycle is created and fetches begin. |
-| `cycle.fetched` | Fetches completed; carries `raw` and `deduped` counts. |
+| `cycle.fetched` | Fetches completed; carries `received` count. |
 | `cycle.summarized` | AI summarization completed; carries `items` and `degraded`. |
 | `cycle.success` | Cycle completed with `status='succeeded'`. |
 | `cycle.degraded` | Cycle completed with `status='degraded'`. |
@@ -291,6 +378,9 @@ If no recipient is configured when the cycle has items to send, the digest is st
 | `channel.fetch.ok` | A channel was fetched without error. |
 | `channel.inaccessible` | A channel's Telegram getChat/fetch failed; the channel is marked `inaccessible`. |
 | `channel.banned` | A channel was promoted from `inaccessible` after repeated failures. |
+| `post.received` | A new post row was created (`Upsert` returned `created=true`). |
+| `post.sent` | A post row was marked `sent` after a successful Telegram send. |
+| `post.send_failed` | A post row was marked `send_failed` after a Telegram send error. |
 | `telegram.send.failed` | The send side returned an error (network / API 4xx or 5xx). |
 | `telegram.send.blocked` | Telegram returned a "bot blocked by the user" response. |
 | `telegram.send.no_recipient` | The cycle had items to send but no subscriber chat id was configured. Distinct from `telegram.send.failed` so the operator can tell the two apart in the events view. |
@@ -301,3 +391,4 @@ If no recipient is configured when the cycle has items to send, the digest is st
 - Migrations are append-only SQL files in `backend/migrations/`, named `NNNN_description.sql`.
 - The store layer records applied migrations in a `schema_migrations` table (`version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL`).
 - A failed migration aborts startup with the exact error; the DB is not touched.
+- Migration `0002_posts_queue.sql` introduces the persistent `posts` table, the `digest_items.post_id` FK + UNIQUE, and a backfill from existing `digest_items` rows. The backfill creates one post per existing item with status `sent` (or `send_failed` if the parent digest's `send_status` was not `ok`) so the live history renders identically.

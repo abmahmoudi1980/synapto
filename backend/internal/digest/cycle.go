@@ -2,9 +2,12 @@ package digest
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"log/slog"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,6 +29,7 @@ type CycleDeps struct {
 	Cycles     store.CycleRepo
 	Digests    store.DigestRepo
 	Health     store.HealthRepo
+	Posts      store.PostRepo
 	// SubscriberChatID is the initial chat id used as a fallback when
 	// the settings row has none. The cycle reads the live chat id from
 	// the settings row at the start of every run, so changes (e.g. an
@@ -51,7 +55,20 @@ func NewCycle(deps CycleDeps) *Cycle {
 
 // Run executes one complete digest cycle. The windowStart/windowEnd pair
 // defines the time range this cycle covers; the scheduler picks them.
-// Returns the cycle ID and an error only if the cycle could not be recorded.
+// Returns the cycle ID and an error only if the cycle could not be
+// recorded.
+//
+// The cycle is now post-driven: it
+//   1. fetches new posts from each channel and persists them as
+//      posts rows (status='received'),
+//   2. summarizes posts with status='received' (concurrent AI calls),
+//   3. bundles all unsent posts (status IN
+//      ('summarized','send_failed','included_in_digest')) into a single
+//      digest,
+//   4. sends the digest to Telegram, marking each post as sent or
+//      send_failed.
+// Posts that failed to send are picked up by the next cycle
+// automatically (auto-retry; no manual intervention).
 func (c *Cycle) Run(ctx context.Context, windowStart, windowEnd time.Time) (string, error) {
 	log := c.deps.Log.With("window_start", windowStart.Format(time.RFC3339), "window_end", windowEnd.Format(time.RFC3339))
 	cycleID := uuid.NewString()
@@ -70,12 +87,15 @@ func (c *Cycle) Run(ctx context.Context, windowStart, windowEnd time.Time) (stri
 	log.Info("cycle.start")
 
 	// 1. Fetch: list active channels and pull new posts from each.
+	// Each unique (channel_id, source_msg_id) becomes one persistent
+	// posts row with status='received'. The UNIQUE constraint on
+	// (channel_id, source_msg_id) prevents duplicates on refetch.
 	channels, err := c.deps.Channels.List(ctx)
 	if err != nil {
 		_ = c.finishCycle(ctx, cycleID, store.CycleFailed, 0, 0, "list channels: "+err.Error())
 		return cycleID, err
 	}
-	var allItems []Item
+	fetched := 0
 	for _, ch := range channels {
 		if ch.Status != store.ChannelActive {
 			continue
@@ -94,18 +114,33 @@ func (c *Cycle) Run(ctx context.Context, windowStart, windowEnd time.Time) (stri
 		if len(posts) > 0 {
 			_ = c.deps.Health.RecordEvent(ctx, store.OpEvent{
 				OccurredAt: time.Now().UTC(), Level: "info", Kind: "channel.fetch.ok",
-				CycleID: cycleID, Message: ch.Handle, Context: "",
+				CycleID: cycleID, Message: ch.Handle,
 			})
 		}
 		for _, p := range posts {
-			allItems = append(allItems, Item{
-				ChannelID:     ch.ID,
-				ChannelHandle: ch.Handle,
-				SourceMsgID:   p.MessageID,
-				Text:          p.Text,
-				MediaKind:     ai.MediaKind(p.MediaKind),
-				Captions:      p.Captions,
+			dKey := computeDedupKey(p.Text, string(p.MediaKind), p.Captions)
+			link := "https://t.me/" + ch.Handle + "/" + strconv.FormatInt(p.MessageID, 10)
+			_, created, upErr := c.deps.Posts.Upsert(ctx, store.Post{
+				ChannelID:   ch.ID,
+				SourceMsgID: p.MessageID,
+				DedupKey:    dKey,
+				Link:        link,
+				RawText:     p.Text,
+				MediaKind:   store.MediaKind(p.MediaKind),
+				CapturedAt:  time.Now().UTC(),
+				Status:      store.PostReceived,
 			})
+			if upErr != nil {
+				log.Warn("post upsert failed", "channel", ch.Handle, "msg_id", p.MessageID, "err", upErr)
+				continue
+			}
+			if created {
+				fetched++
+				_ = c.deps.Health.RecordEvent(ctx, store.OpEvent{
+					OccurredAt: time.Now().UTC(), Level: "info", Kind: "post.received",
+					CycleID: cycleID, Message: ch.Handle + "/" + strconv.FormatInt(p.MessageID, 10),
+				})
+			}
 		}
 		// Advance cursor to the latest post.
 		if len(posts) > 0 {
@@ -113,27 +148,17 @@ func (c *Cycle) Run(ctx context.Context, windowStart, windowEnd time.Time) (stri
 			_ = c.deps.Channels.AdvanceCursor(ctx, ch.ID, last, time.Now().UTC())
 		}
 	}
+	log.Info("cycle.fetched", "received", fetched)
 
-	// 2. Dedup.
-	items := Dedup(allItems)
-	log.Info("cycle.fetched", "raw", len(allItems), "deduped", len(items))
-
-	// 3. No items → skip.
-	if len(items) == 0 {
-		_ = c.finishCycle(ctx, cycleID, store.CycleSkippedNoItems, 0, 0, "")
-		log.Info("cycle.skipped_no_items")
-		return cycleID, nil
-	}
-
-	// 4. Summarize + categorize (with concurrency limit).
+	// 2. Summarize: list posts with status='received' and call AI.
 	settings, err := c.deps.Settings.Get(ctx)
 	if err != nil {
-		_ = c.finishCycle(ctx, cycleID, store.CycleFailed, len(items), 0, "get settings: "+err.Error())
+		_ = c.finishCycle(ctx, cycleID, store.CycleFailed, fetched, 0, "get settings: "+err.Error())
 		return cycleID, err
 	}
 	categories, err := c.deps.Categories.List(ctx)
 	if err != nil {
-		_ = c.finishCycle(ctx, cycleID, store.CycleFailed, len(items), 0, "list categories: "+err.Error())
+		_ = c.finishCycle(ctx, cycleID, store.CycleFailed, fetched, 0, "list categories: "+err.Error())
 		return cycleID, err
 	}
 	categorySet := make(map[string]bool, len(categories))
@@ -141,36 +166,83 @@ func (c *Cycle) Run(ctx context.Context, windowStart, windowEnd time.Time) (stri
 		categorySet[cat.Name] = true
 	}
 
-	summaries, degraded := c.summarizeBatch(ctx, items, categorySet, settings.UncategorizedLabel)
-	log.Info("cycle.summarized", "items", len(summaries), "degraded", degraded)
+	received, err := c.deps.Posts.ListReceived(ctx, 200)
+	if err != nil {
+		_ = c.finishCycle(ctx, cycleID, store.CycleFailed, fetched, 0, "list received posts: "+err.Error())
+		return cycleID, err
+	}
+	degraded := false
+	if len(received) > 0 {
+		degraded = c.summarizeBatch(ctx, received, categories, settings.UncategorizedLabel)
+	}
+	log.Info("cycle.summarized", "items", len(received), "degraded", degraded)
 
-	// 5. Render. Filter out items whose summary is empty (e.g. dropped
-	// after ErrInvalidInput from the AI).
-	renderItems := make([]RenderItem, 0, len(summaries))
-	kept := make([]int, 0, len(summaries)) // indices into items[] we kept
-	for i, s := range summaries {
-		if s.Summary == "" {
+	// 3. Bundle: list all unsent posts (summarized + previously
+	// send_failed). The cutoff is "now" so any post whose last
+	// attempt was before the current call to ListUnsent is eligible
+	// for re-bundling. A post that the current cycle just marked
+	// included_in_digest has last_attempt_at = now, so a follow-up
+	// ListUnsent within the same Run() would not re-bundle it.
+	unsent, err := c.deps.Posts.ListUnsent(ctx, time.Now().UTC(), 200)
+	if err != nil {
+		_ = c.finishCycle(ctx, cycleID, store.CycleFailed, fetched, 0, "list unsent posts: "+err.Error())
+		return cycleID, err
+	}
+	if len(unsent) == 0 {
+		_ = c.finishCycle(ctx, cycleID, store.CycleSkippedNoItems, fetched, 0, "")
+		log.Info("cycle.skipped_no_items")
+		return cycleID, nil
+	}
+
+	// 4. Render. Filter out posts whose summary is empty (filtered_out
+	// or never summarized).
+	type renderPost struct {
+		post store.Post
+		cat  string
+		ord  int
+	}
+	renderPosts := make([]renderPost, 0, len(unsent))
+	channelHandles := make(map[string]string, len(channels))
+	for _, ch := range channels {
+		channelHandles[ch.ID] = ch.Handle
+	}
+	for _, p := range unsent {
+		if p.Summary == "" {
 			continue
 		}
-		catName := s.Category
-		catOrder := 0
-		if !categorySet[catName] {
-			catName = settings.UncategorizedLabel
-		}
+		catName := ""
 		for _, cat := range categories {
-			if cat.Name == catName {
-				catOrder = cat.Ordering
+			if cat.ID == p.CategoryID {
+				catName = cat.Name
 				break
 			}
 		}
+		if catName == "" || !categorySet[catName] {
+			catName = settings.UncategorizedLabel
+		}
+		var ord int
+		for _, cat := range categories {
+			if cat.Name == catName {
+				ord = cat.Ordering
+				break
+			}
+		}
+		renderPosts = append(renderPosts, renderPost{post: p, cat: catName, ord: ord})
+	}
+
+	renderItems := make([]RenderItem, 0, len(renderPosts))
+	for _, rp := range renderPosts {
+		handle := channelHandles[rp.post.ChannelID]
+		if handle == "" {
+			handle = "unknown"
+		}
 		renderItems = append(renderItems, RenderItem{
-			Summary:       s.Summary,
-			CategoryName:  catName,
-			CategoryOrder: catOrder,
-			ChannelHandle: items[i].ChannelHandle,
-			MediaKind:     items[i].MediaKind,
+			Summary:       rp.post.Summary,
+			CategoryName:  rp.cat,
+			CategoryOrder: rp.ord,
+			ChannelHandle: handle,
+			MediaKind:     ai.MediaKind(rp.post.MediaKind),
 		})
-		kept = append(kept, i)
 	}
 	messages := Render(RenderInput{
 		WindowEnd:     windowEnd,
@@ -180,21 +252,29 @@ func (c *Cycle) Run(ctx context.Context, windowStart, windowEnd time.Time) (stri
 		Uncategorized: settings.UncategorizedLabel,
 	})
 
+	// 5. Mark all bundled posts as 'included_in_digest' before we
+	// attempt the send. If we crash between here and the actual send,
+	// the next cycle will pick them up via ListUnsent (because
+	// status='included_in_digest' and last_attempt_at is set to now,
+	// which is < next cycle's window_start).
+	postIDs := make([]string, 0, len(renderPosts))
+	for _, rp := range renderPosts {
+		postIDs = append(postIDs, rp.post.ID)
+	}
+	if err := c.deps.Posts.MarkIncluded(ctx, postIDs); err != nil {
+		log.Warn("mark posts included failed", "err", err)
+	}
+
 	// 6. Send to Telegram.
 	renderedText := ""
 	if len(messages) > 0 {
 		renderedText = messages[0]
-		if len(messages) > 1 {
-			// For phase 1, join with a separator; the sender handles the actual
-			// multi-message send. For recording, we store the first message.
-			renderedText = messages[0]
-		}
 	}
 	sendStatus := store.SendOK
 	var telegramMsgID int64
 	chatID := settings.TelegramSubscriberChat
 	if chatID == 0 {
-		chatID = c.deps.SubscriberChatID // fallback to env-var default
+		chatID = c.deps.SubscriberChatID
 	}
 	if chatID != 0 && len(messages) > 0 {
 		for i, msg := range messages {
@@ -224,11 +304,6 @@ func (c *Cycle) Run(ctx context.Context, windowStart, windowEnd time.Time) (stri
 			}
 		}
 	} else if len(messages) > 0 {
-		// No recipient configured: surface this clearly. With
-		// TELEGRAM_SOURCE=preview there's no long-poll, so the chat id
-		// is never auto-discovered from a /start; the operator must set
-		// TELEGRAM_SUBSCRIBER_CHAT in the env, or switch to longpoll so
-		// the Real client's recordSubscriberChat can populate it.
 		sendStatus = store.SendFailed
 		log.Warn("send skipped: no subscriber chat id",
 			"hint", "set TELEGRAM_SUBSCRIBER_CHAT in the env, or use TELEGRAM_SOURCE=longpoll to auto-discover from /start")
@@ -236,7 +311,37 @@ func (c *Cycle) Run(ctx context.Context, windowStart, windowEnd time.Time) (stri
 			"no subscriber chat id configured; send skipped (set TELEGRAM_SUBSCRIBER_CHAT or use longpoll)")
 	}
 
-	// 7. Record digest.
+	// 7. Per-post send outcome. Sent → 'sent'; failed/blocked/no-recipient →
+	// 'send_failed'. The next cycle's ListUnsent will pick up the failed
+	// posts again (auto-retry).
+	if len(messages) > 0 {
+		if sendStatus == store.SendOK {
+			for _, id := range postIDs {
+				if err := c.deps.Posts.MarkSent(ctx, id, telegramMsgID); err != nil {
+					log.Warn("mark post sent failed", "post_id", id, "err", err)
+				} else {
+					_ = c.deps.Health.RecordEvent(ctx, store.OpEvent{
+						OccurredAt: time.Now().UTC(), Level: "info", Kind: "post.sent",
+						CycleID: cycleID, Message: id,
+					})
+				}
+			}
+		} else {
+			errMsg := "send_status=" + string(sendStatus)
+			for _, id := range postIDs {
+				if err := c.deps.Posts.MarkSendFailed(ctx, id, errMsg); err != nil {
+					log.Warn("mark post send_failed failed", "post_id", id, "err", err)
+				} else {
+					_ = c.deps.Health.RecordEvent(ctx, store.OpEvent{
+						OccurredAt: time.Now().UTC(), Level: "warn", Kind: "post.send_failed",
+						CycleID: cycleID, Message: id + ": " + errMsg,
+					})
+				}
+			}
+		}
+	}
+
+	// 8. Record digest row.
 	digestID := uuid.NewString()
 	if err := c.deps.Digests.Create(ctx, store.Digest{
 		ID:           digestID,
@@ -249,31 +354,27 @@ func (c *Cycle) Run(ctx context.Context, windowStart, windowEnd time.Time) (stri
 		log.Error("record digest failed", "err", err)
 	}
 
-	// Record digest items. Only persist items that survived the summary
-	// step (i.e. non-empty Summary). Dropped items are not stored.
-	for order, i := range kept {
-		s := summaries[i]
-		catName := s.Category
-		if !categorySet[catName] {
-			catName = settings.UncategorizedLabel
-		}
+	// 9. Record digest_items (one row per post). UNIQUE(post_id) ensures
+	// a post is in at most one digest_items row.
+	for order, rp := range renderPosts {
 		var catID string
 		for _, cat := range categories {
-			if cat.Name == catName {
+			if cat.Name == rp.cat {
 				catID = cat.ID
 				break
 			}
 		}
 		_ = c.deps.Digests.AddItem(ctx, store.DigestItem{
 			CycleID:     cycleID,
-			ChannelID:   items[i].ChannelID,
+			ChannelID:   rp.post.ChannelID,
 			CategoryID:  catID,
-			SourceMsgID: items[i].SourceMsgID,
-			DedupKey:    string(items[i].Key()),
-			RawText:     items[i].Text,
-			MediaKind:   store.MediaKind(items[i].MediaKind),
-			Summary:     s.Summary,
-			Confidence:  s.Confidence,
+			SourceMsgID: rp.post.SourceMsgID,
+			PostID:      rp.post.ID,
+			DedupKey:    rp.post.DedupKey,
+			RawText:     rp.post.RawText,
+			MediaKind:   rp.post.MediaKind,
+			Summary:     rp.post.Summary,
+			Confidence:  rp.post.Confidence,
 			Ordering:    order,
 		})
 	}
@@ -281,7 +382,7 @@ func (c *Cycle) Run(ctx context.Context, windowStart, windowEnd time.Time) (stri
 	// Update send result.
 	_ = c.deps.Digests.UpdateSendResult(ctx, digestID, telegramMsgID, sendStatus)
 
-	// 8. Finish cycle.
+	// 10. Finish cycle.
 	status := store.CycleSucceeded
 	if degraded {
 		status = store.CycleDegraded
@@ -289,116 +390,131 @@ func (c *Cycle) Run(ctx context.Context, windowStart, windowEnd time.Time) (stri
 	if sendStatus != store.SendOK {
 		status = store.CycleFailed
 	}
-	_ = c.finishCycle(ctx, cycleID, status, len(items), len(kept), "")
-	log.Info("cycle.done", "status", status, "items", len(summaries))
+	_ = c.finishCycle(ctx, cycleID, status, fetched, len(renderPosts), "")
+	log.Info("cycle.done", "status", status, "items", len(renderPosts))
 
 	return cycleID, nil
 }
 
-// summarizeBatch runs the summarizer over all items with a concurrency
-// limit. If any call returns ErrUnavailable, the cycle is marked degraded
-// and the remaining items use raw text as the summary. ErrCategoryUnknown
-// is mapped to the configured uncategorized_label (when the returned
-// category is not in the configured set or is empty) and emits a warn
-// event for taxonomy tuning. ErrInvalidInput drops the item and emits a
-// warn event.
-func (c *Cycle) summarizeBatch(ctx context.Context, items []Item, categories map[string]bool, uncategorized string) ([]ai.Output, bool) {
-	out := make([]ai.Output, len(items))
+// computeDedupKey produces the dedup signature used by both the
+// in-memory dedup helper and the post-queue. Format: "text:<sha256>"
+// for text items, "media:<kind>:<captions-sha>" for media-only items.
+func computeDedupKey(text, kind string, captions []string) string {
+	t := strings.TrimSpace(text)
+	if t != "" {
+		return "text:" + hashText(t)
+	}
+	caps := make([]string, 0, len(captions))
+	for _, c := range captions {
+		c = strings.TrimSpace(c)
+		if c != "" {
+			caps = append(caps, c)
+		}
+	}
+	return "media:" + kind + ":" + hashText(strings.Join(caps, "|"))
+}
+
+func hashText(s string) string {
+	h := sha256.Sum256([]byte(strings.ToLower(s)))
+	return hex.EncodeToString(h[:])
+}
+
+// summarizeBatch runs the summarizer over the supplied posts with a
+// concurrency limit. The persistent post rows are updated in place:
+//   - successful call → MarkSummarized with the category id resolved
+//     from the configured category set,
+//   - ErrCategoryUnknown → MarkSummarized with the uncategorized label
+//     and a warn event for taxonomy tuning,
+//   - ErrInvalidInput → MarkFiltered (item is dropped),
+//   - any other error (including ErrUnavailable) → MarkSummarized with
+//     the raw headline as the summary.
+//
+// Returns true if any item fell back to the raw-headline path
+// (degraded mode).
+func (c *Cycle) summarizeBatch(ctx context.Context, posts []store.Post, categories []store.Category, uncategorized string) bool {
+	categorySet := make(map[string]bool, len(categories))
+	for _, cat := range categories {
+		categorySet[cat.Name] = true
+	}
+	var mu sync.Mutex
 	degraded := false
 
-	var mu sync.Mutex
 	sem := make(chan struct{}, 8) // concurrency limit
 	var wg sync.WaitGroup
 
-	for i, it := range items {
+	for _, p := range posts {
 		wg.Add(1)
-		go func(idx int, item Item) {
+		go func(post store.Post) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
+			handle := ""
+			ch, _ := c.deps.Channels.Get(ctx, post.ChannelID)
+			if ch.Handle != "" {
+				handle = ch.Handle
+			}
 			o, err := c.deps.Summarizer.Summarize(ctx, ai.Input{
-				ChannelHandle: item.ChannelHandle,
-				Text:          item.Text,
-				MediaKind:     item.MediaKind,
-				Captions:      item.Captions,
+				ChannelHandle: handle,
+				Text:          post.RawText,
+				MediaKind:     ai.MediaKind(post.MediaKind),
+				Captions:      nil,
 			})
 			if err != nil {
 				switch {
 				case errors.Is(err, ai.ErrInvalidInput):
-					// Drop the item; record a warn event.
-					mu.Lock()
-					out[idx] = ai.Output{}
-					mu.Unlock()
+					_ = c.deps.Posts.MarkFiltered(ctx, post.ID)
 					_ = c.deps.Health.RecordEvent(ctx, store.OpEvent{
-						OccurredAt: time.Now().UTC(),
-						Level:      "warn",
-						Kind:       "ai.invalid_input",
-						Message:    "dropped item: " + err.Error(),
+						OccurredAt: time.Now().UTC(), Level: "warn", Kind: "ai.invalid_input",
+						Message: "dropped post " + post.ID + ": " + err.Error(),
 					})
 					return
 				case errors.Is(err, ai.ErrCategoryUnknown):
-					// Accept the returned Output (the contract allows the
-					// implementation to populate Summary + a suggested
-					// category). If the suggested category is empty or not
-					// in the configured set, substitute uncategorized_label.
 					cat := o.Category
-					if cat == "" || !categories[cat] {
+					if cat == "" || !categorySet[cat] {
 						cat = uncategorized
 					}
-					mu.Lock()
-					out[idx] = ai.Output{
-						Summary:    o.Summary,
-						Category:   cat,
-						Confidence: o.Confidence,
-					}
-					mu.Unlock()
+					_ = c.deps.Posts.MarkSummarized(ctx, post.ID, "", o.Summary, o.Confidence)
 					_ = c.deps.Health.RecordEvent(ctx, store.OpEvent{
-						OccurredAt: time.Now().UTC(),
-						Level:      "warn",
-						Kind:       "ai.category_unknown",
-						Message:    "category not in configured set: " + o.Category,
+						OccurredAt: time.Now().UTC(), Level: "warn", Kind: "ai.category_unknown",
+						Message: "category not in configured set: " + o.Category,
 					})
 					return
 				default:
-					// Treat any other error (including ErrUnavailable) as
-					// a degraded cycle. Fall back to raw text under the
-					// uncategorized label.
 					mu.Lock()
 					degraded = true
-					raw := item.Text
+					mu.Unlock()
+					raw := post.RawText
 					if len(raw) > 280 {
 						raw = raw[:277] + "…"
 					}
-					out[idx] = ai.Output{Summary: raw, Category: uncategorized, Confidence: 0}
-					mu.Unlock()
+					_ = c.deps.Posts.MarkSummarized(ctx, post.ID, "", raw, 0)
 					_ = c.deps.Health.RecordEvent(ctx, store.OpEvent{
-						OccurredAt: time.Now().UTC(),
-						Level:      "warn",
-						Kind:       "ai.unavailable",
-						Message:    "summarizer unavailable: " + err.Error(),
+						OccurredAt: time.Now().UTC(), Level: "warn", Kind: "ai.unavailable",
+						Message: "summarizer unavailable: " + err.Error(),
 					})
 					return
 				}
 			}
-			mu.Lock()
-			// If the AI returned a category not in our set (without raising
-			// ErrCategoryUnknown), coerce to uncategorized.
-			if o.Category != "" && !categories[o.Category] {
+			if o.Category != "" && !categorySet[o.Category] {
 				_ = c.deps.Health.RecordEvent(ctx, store.OpEvent{
-					OccurredAt: time.Now().UTC(),
-					Level:      "warn",
-					Kind:       "ai.category_unknown",
-					Message:    "category not in configured set: " + o.Category,
+					OccurredAt: time.Now().UTC(), Level: "warn", Kind: "ai.category_unknown",
+					Message: "category not in configured set: " + o.Category,
 				})
 				o.Category = uncategorized
 			}
-			out[idx] = o
-			mu.Unlock()
-		}(i, it)
+			catID := ""
+			for _, cat := range categories {
+				if cat.Name == o.Category {
+					catID = cat.ID
+					break
+				}
+			}
+			_ = c.deps.Posts.MarkSummarized(ctx, post.ID, catID, o.Summary, o.Confidence)
+		}(p)
 	}
 	wg.Wait()
-	return out, degraded
+	return degraded
 }
 
 // finishCycle is a thin wrapper around CycleRepo.Finish that also

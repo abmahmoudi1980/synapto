@@ -111,6 +111,7 @@ func TestCycle_EndToEnd_OneChannelThreeMessages(t *testing.T) {
 		Cycles:           sqlite.CycleStore{S: st},
 		Digests:          sqlite.DigestStore{S: st},
 		Health:           sqlite.HealthStore{S: st},
+		Posts:            sqlite.PostStore{S: st},
 		SubscriberChatID: 123456789,
 	})
 
@@ -208,6 +209,7 @@ func TestCycle_NoNewItems_SkipsAndDoesNotSend(t *testing.T) {
 		Cycles:           sqlite.CycleStore{S: st},
 		Digests:          sqlite.DigestStore{S: st},
 		Health:           sqlite.HealthStore{S: st},
+		Posts:            sqlite.PostStore{S: st},
 		SubscriberChatID: 123456789,
 	})
 
@@ -269,6 +271,7 @@ func TestCycle_NoSubscriberChat_MarksSendFailed(t *testing.T) {
 		Cycles:           sqlite.CycleStore{S: st},
 		Digests:          sqlite.DigestStore{S: st},
 		Health:           sqlite.HealthStore{S: st},
+		Posts:            sqlite.PostStore{S: st},
 		SubscriberChatID: 0, // no recipient
 	})
 
@@ -352,6 +355,7 @@ func TestCycle_RestartSafety_NoDoubleDelivery(t *testing.T) {
 		Cycles:           sqlite.CycleStore{S: st},
 		Digests:          sqlite.DigestStore{S: st},
 		Health:           sqlite.HealthStore{S: st},
+		Posts:            sqlite.PostStore{S: st},
 		SubscriberChatID: 123456789,
 	})
 
@@ -440,6 +444,7 @@ func TestCycle_RenamedCategoryAppearsInDigest(t *testing.T) {
 		Cycles:           sqlite.CycleStore{S: st},
 		Digests:          sqlite.DigestStore{S: st},
 		Health:           sqlite.HealthStore{S: st},
+		Posts:            sqlite.PostStore{S: st},
 		SubscriberChatID: 123456789,
 	})
 
@@ -504,6 +509,7 @@ func TestCycle_RenamedCategoryAppearsInDigest(t *testing.T) {
 		Cycles:           sqlite.CycleStore{S: st},
 		Digests:          sqlite.DigestStore{S: st},
 		Health:           sqlite.HealthStore{S: st},
+		Posts:            sqlite.PostStore{S: st},
 		SubscriberChatID: 123456789,
 	})
 

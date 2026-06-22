@@ -38,6 +38,7 @@ type digestItemRow struct {
 	ChannelID   string          `db:"channel_id"`
 	CategoryID  sql.NullString  `db:"category_id"`
 	SourceMsgID int64           `db:"source_msg_id"`
+	PostID      sql.NullString  `db:"post_id"`
 	DedupKey    string          `db:"dedup_key"`
 	RawText     string          `db:"raw_text"`
 	MediaKind   string          `db:"media_kind"`
@@ -53,6 +54,7 @@ func (r digestItemRow) toEntity() store.DigestItem {
 		ChannelID:   r.ChannelID,
 		CategoryID:  r.CategoryID.String,
 		SourceMsgID: r.SourceMsgID,
+		PostID:      r.PostID.String,
 		DedupKey:    r.DedupKey,
 		RawText:     r.RawText,
 		MediaKind:   store.MediaKind(r.MediaKind),
@@ -74,8 +76,12 @@ func (s *Store) CreateDigest(ctx context.Context, d store.Digest) error {
 	return err
 }
 
-// AddDigestItem inserts one digest item. Uses ON CONFLICT DO NOTHING so a
-// partial cycle replay is safe (see data-model.md "Cycle idempotency").
+// AddDigestItem inserts one digest item. Uses ON CONFLICT DO NOTHING
+// on (cycle_id, channel_id, source_msg_id) so a partial cycle replay
+// is safe; the UNIQUE on post_id is enforced at insert time and will
+// return an error if a second digest_item row references the same
+// persistent post. The (post_id) UNIQUE is the new post-queue safety
+// net (see data-model.md "Post queue").
 func (s *Store) AddDigestItem(ctx context.Context, item store.DigestItem) error {
 	if item.ID == "" {
 		item.ID = uuid.NewString()
@@ -88,11 +94,15 @@ func (s *Store) AddDigestItem(ctx context.Context, item store.DigestItem) error 
 	if item.Confidence > 0 {
 		conf = item.Confidence
 	}
+	var postID interface{}
+	if item.PostID != "" {
+		postID = item.PostID
+	}
 	_, err := s.db.ExecContext(ctx, `INSERT INTO digest_items
-		(id, cycle_id, channel_id, category_id, source_msg_id, dedup_key, raw_text, media_kind, summary, confidence, ordering)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		(id, cycle_id, channel_id, category_id, source_msg_id, post_id, dedup_key, raw_text, media_kind, summary, confidence, ordering)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (cycle_id, channel_id, source_msg_id) DO NOTHING`,
-		item.ID, item.CycleID, item.ChannelID, catID, item.SourceMsgID, item.DedupKey,
+		item.ID, item.CycleID, item.ChannelID, catID, item.SourceMsgID, postID, item.DedupKey,
 		item.RawText, string(item.MediaKind), item.Summary, conf, item.Ordering)
 	return err
 }
