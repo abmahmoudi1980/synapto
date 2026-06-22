@@ -223,6 +223,17 @@ func (c *Cycle) Run(ctx context.Context, windowStart, windowEnd time.Time) (stri
 				}
 			}
 		}
+	} else if len(messages) > 0 {
+		// No recipient configured: surface this clearly. With
+		// TELEGRAM_SOURCE=preview there's no long-poll, so the chat id
+		// is never auto-discovered from a /start; the operator must set
+		// TELEGRAM_SUBSCRIBER_CHAT in the env, or switch to longpoll so
+		// the Real client's recordSubscriberChat can populate it.
+		sendStatus = store.SendFailed
+		log.Warn("send skipped: no subscriber chat id",
+			"hint", "set TELEGRAM_SUBSCRIBER_CHAT in the env, or use TELEGRAM_SOURCE=longpoll to auto-discover from /start")
+		c.RecordTelegramEvent(ctx, "telegram.send.no_recipient",
+			"no subscriber chat id configured; send skipped (set TELEGRAM_SUBSCRIBER_CHAT or use longpoll)")
 	}
 
 	// 7. Record digest.

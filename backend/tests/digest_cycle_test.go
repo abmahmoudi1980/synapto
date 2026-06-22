@@ -237,6 +237,89 @@ func TestCycle_NoNewItems_SkipsAndDoesNotSend(t *testing.T) {
 	}
 }
 
+// TestCycle_NoSubscriberChat_MarksSendFailed covers the case where the
+// cycle has items to send but no recipient is configured (DB settings
+// subscriber chat is 0 and the env fallback is 0). The send loop is
+// skipped; the digest must NOT be marked as send_status=ok — that
+// would silently hide the misconfiguration. It must be marked failed
+// so the operator notices in the history.
+func TestCycle_NoSubscriberChat_MarksSendFailed(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+
+	seed := `[{"channel":"no_recipient_chan","messages":[
+		{"id":1,"text":"hello world","media":"text"}
+	]}]`
+	tg, sentPath := newTestTelegram(t, seed)
+
+	if _, err := st.AddChannel(ctx, "no_recipient_chan", "NoRecipient"); err != nil {
+		t.Fatalf("add channel: %v", err)
+	}
+
+	// Deliberately do NOT set telegram_subscriber_chat in settings.
+	// SubscriberChatID env fallback is 0.
+
+	cycle := digest.NewCycle(digest.CycleDeps{
+		Log:              logging.New("debug"),
+		Telegram:         tg,
+		Summarizer:       ai.NewFake(nil, "Uncategorized"),
+		Channels:         sqlite.ChannelStore{S: st},
+		Categories:       sqlite.CategoryStore{S: st},
+		Settings:         sqlite.SettingsStore{S: st},
+		Cycles:           sqlite.CycleStore{S: st},
+		Digests:          sqlite.DigestStore{S: st},
+		Health:           sqlite.HealthStore{S: st},
+		SubscriberChatID: 0, // no recipient
+	})
+
+	cycleID, err := cycle.Run(ctx, time.Now().Add(-10*time.Minute), time.Now())
+	if err != nil {
+		t.Fatalf("cycle.Run: %v", err)
+	}
+
+	// Verify: cycle status is failed (not succeeded, not degraded).
+	c, err := st.GetCycle(ctx, cycleID)
+	if err != nil {
+		t.Fatalf("get cycle: %v", err)
+	}
+	if c.Status != store.CycleFailed {
+		t.Errorf("expected failed (no recipient), got %s", c.Status)
+	}
+
+	// Verify: digest exists and is marked failed, not ok.
+	d, err := st.GetDigestByCycle(ctx, cycleID)
+	if err != nil {
+		t.Fatalf("get digest: %v", err)
+	}
+	if d.SendStatus != store.SendFailed {
+		t.Errorf("expected digest send_status=failed, got %s", d.SendStatus)
+	}
+	if d.TelegramMsgID != 0 {
+		t.Errorf("expected telegram_msg_id=0 (no send), got %d", d.TelegramMsgID)
+	}
+
+	// Verify: nothing was actually sent on the wire.
+	if n := readSentFile(t, sentPath); n != 0 {
+		t.Errorf("expected 0 sent messages, got %d", n)
+	}
+
+	// Verify: the operator-visible event records the no-recipient reason.
+	events, err := st.RecentEvents(ctx, 50)
+	if err != nil {
+		t.Fatalf("recent events: %v", err)
+	}
+	foundNoRecipient := false
+	for _, e := range events {
+		if e.Kind == "telegram.send.no_recipient" {
+			foundNoRecipient = true
+			break
+		}
+	}
+	if !foundNoRecipient {
+		t.Errorf("expected an op_event with kind=telegram.send.no_recipient, got %d events", len(events))
+	}
+}
+
 func TestCycle_RestartSafety_NoDoubleDelivery(t *testing.T) {
 	st := newTestStore(t)
 	ctx := context.Background()
