@@ -135,6 +135,22 @@ func (s *Server) AuthMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// requestIsSecure reports whether the current request reached us over
+// HTTPS — either directly (r.TLS != nil when Go's http.Server is
+// configured with TLS) or via a reverse proxy that sets the
+// X-Forwarded-Proto header. Used to decide the session cookie's
+// Secure flag so the cookie round-trips over plain HTTP when the
+// deployment is HTTP, and is locked to HTTPS when behind TLS.
+func requestIsSecure(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	if strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
+		return true
+	}
+	return false
+}
+
 // handleAuthLogin: POST /api/auth/login { password: "..." }
 func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	if s.deps.AdminPassword == "" {
@@ -174,7 +190,7 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		Value:    tok,
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   !s.deps.Dev,
+		Secure:   requestIsSecure(r),
 		SameSite: http.SameSiteLaxMode,
 		Expires:  time.Unix(expiresAt, 0),
 	})
@@ -192,7 +208,7 @@ func (s *Server) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
 		Value:    "",
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   !s.deps.Dev,
+		Secure:   requestIsSecure(r),
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   -1,
 	})

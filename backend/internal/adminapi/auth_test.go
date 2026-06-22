@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -109,6 +110,73 @@ func TestAuth_LoginSucceedsAndSetsCookie(t *testing.T) {
 	}
 	if !found {
 		t.Error("session cookie not set")
+	}
+}
+
+// TestAuth_CookieSecureFlagFollowsRequestProtocol verifies that the
+// session cookie's Secure flag tracks the request's effective protocol
+// (HTTPS via r.TLS or X-Forwarded-Proto) rather than the server's Dev
+// flag. This is what lets a plain-HTTP deployment round-trip the
+// cookie; over HTTPS (or behind a TLS-terminating proxy) the cookie
+// stays locked to HTTPS.
+func TestAuth_CookieSecureFlagFollowsRequestProtocol(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+	st, err := sqlite.Open(context.Background(), dbPath, slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	tg, err := telegram.NewFake(filepath.Join(dir, "seed.json"), "")
+	if err != nil {
+		t.Fatalf("new fake telegram: %v", err)
+	}
+	// Dev=false mimics a production deployment where the old behavior
+	// would have set Secure=true and broken cookie round-trip on HTTP.
+	srv := adminapi.New(adminapi.Deps{
+		Log:           slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		Version:       "test",
+		Channels:      sqlite.ChannelStore{S: st},
+		Categories:    sqlite.CategoryStore{S: st},
+		Settings:      sqlite.SettingsStore{S: st},
+		Cycles:        sqlite.CycleStore{S: st},
+		Digests:       sqlite.DigestStore{S: st},
+		Health:        sqlite.HealthStore{S: st},
+		Telegram:      tg,
+		StartedAt:     time.Now(),
+		AdminPassword: "supersecret",
+		Dev:           false,
+	})
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+
+	// 1. Plain HTTP request: cookie must NOT be Secure (otherwise
+	// browsers refuse to send it back on subsequent HTTP requests).
+	res := tsPOST(t, ts, "/api/auth/login", `{"password":"supersecret"}`)
+	for _, c := range res.Cookies() {
+		if c.Name == "synapto_session" {
+			if c.Secure {
+				t.Errorf("plain HTTP: cookie Secure=true; want false (browsers drop it on HTTP)")
+			}
+		}
+	}
+
+	// 2. Simulate a TLS-terminating proxy: X-Forwarded-Proto: https.
+	// The cookie must be Secure so it can't leak back over HTTP.
+	req, _ := http.NewRequest("POST", ts.URL+"/api/auth/login", strings.NewReader(`{"password":"supersecret"}`))
+	req.Header.Set("X-Forwarded-Proto", "https")
+	req.Header.Set("Content-Type", "application/json")
+	res2, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("xfp login: %v", err)
+	}
+	defer res2.Body.Close()
+	for _, c := range res2.Cookies() {
+		if c.Name == "synapto_session" {
+			if !c.Secure {
+				t.Errorf("X-Forwarded-Proto=https: cookie Secure=false; want true")
+			}
+		}
 	}
 }
 
