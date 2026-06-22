@@ -79,9 +79,12 @@ func Render(in RenderInput) []string {
 	var lines []line
 	for _, name := range catOrder {
 		g := cats[name]
-		// Escape the category name so user-supplied names (e.g. "AI & ML")
-		// and the wrapping # stay well-formed under MarkdownV2.
-		lines = append(lines, line{text: "# " + escapeMarkdownV2(g.name)})
+		// Escape the full heading line. The leading '#' is a
+		// MarkdownV2 header marker and must be backslash-escaped or
+		// Telegram rejects the parse with "Character '#' is reserved".
+		// Escaping the name too keeps user-supplied names (e.g. "AI & ML")
+		// well-formed.
+		lines = append(lines, line{text: escapeMarkdownV2("# " + g.name)})
 		for _, it := range g.items {
 			lines = append(lines, line{text: formatItemLine(it, in.Degraded)})
 		}

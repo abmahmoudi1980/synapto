@@ -26,11 +26,11 @@ func TestRender_SingleMessageTwoCategories(t *testing.T) {
 	}
 	want := `📰 News digest — 2026\-06\-21 07:20 UTC
 
-# Technology
+\# Technology
 • Telegram rolls out scheduled messages in channels  \_\(telegram\)
 • A new open\-source LLM beats GPT\-4 on a public benchmark  \_\(ml\_news\)
 
-# Politics
+\# Politics
 • EU parliament passes the AI Liability Directive  \_\(eu\_updates\)
 
 — cycle 8a3f1c20 · 3 items · ok`
