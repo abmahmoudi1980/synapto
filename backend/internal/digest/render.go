@@ -297,3 +297,46 @@ func itoa(n int) string {
 	}
 	return string(buf[i:])
 }
+
+// PerPostInput is one post ready for per-post rendering. See
+// contracts/telegram-render.md (per-post format).
+type PerPostInput struct {
+	Summary       string
+	CategoryName  string
+	ChannelHandle string
+	Link          string
+	MediaKind     ai.MediaKind
+	Degraded      bool
+}
+
+// RenderPerPost produces a single Telegram message text for one post:
+//
+//	📰 <handle> · <category>
+//
+//	<summary>
+//
+//	<link>
+//
+// MarkdownV2-safe: the handle, category name, and link are escaped via
+// escapeMarkdownV2. The summary is run through cleanSummary which also
+// escapes and prefixes non-text media with [Image]/[Video]/etc.
+func RenderPerPost(in PerPostInput) string {
+	cat := in.CategoryName
+	if cat == "" {
+		cat = "Uncategorized"
+	}
+	handle := strings.TrimPrefix(strings.ToLower(in.ChannelHandle), "@")
+	summary := cleanSummary(in.Summary, in.MediaKind)
+	var b strings.Builder
+	b.WriteString("📰 ")
+	b.WriteString(escapeMarkdownV2(handle))
+	b.WriteString(" · ")
+	b.WriteString(escapeMarkdownV2(cat))
+	b.WriteString("\n\n")
+	b.WriteString(summary)
+	if in.Link != "" {
+		b.WriteString("\n\n")
+		b.WriteString(escapeMarkdownV2(in.Link))
+	}
+	return b.String()
+}

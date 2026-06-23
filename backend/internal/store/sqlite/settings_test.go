@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/synapto/assistant/internal/store"
 )
 
 func TestStore_SyncAISettingsOverwritesDefaults(t *testing.T) {
@@ -63,5 +65,50 @@ func TestStore_SyncAISettingsOverwritesDefaults(t *testing.T) {
 	if post.UncategorizedLabel != pre.UncategorizedLabel {
 		t.Errorf("SyncAISettings touched uncategorized_label: %q -> %q",
 			pre.UncategorizedLabel, post.UncategorizedLabel)
+	}
+}
+
+func TestStore_DeliveryModeDefaultsAndUpdates(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+	st, err := Open(context.Background(), dbPath, slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	cur, err := st.GetSettings(context.Background())
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if cur.DeliveryMode != store.DeliveryPerPost {
+		t.Errorf("default delivery_mode = %q, want %q", cur.DeliveryMode, store.DeliveryPerPost)
+	}
+
+	// PATCH to bundled.
+	bundled := store.DeliveryBundled
+	if _, err := st.UpdateSettings(context.Background(), store.SettingsUpdate{DeliveryMode: &bundled}); err != nil {
+		t.Fatalf("patch bundled: %v", err)
+	}
+	cur, _ = st.GetSettings(context.Background())
+	if cur.DeliveryMode != store.DeliveryBundled {
+		t.Errorf("after patch: delivery_mode = %q, want bundled", cur.DeliveryMode)
+	}
+
+	// PATCH to per_post.
+	perPost := store.DeliveryPerPost
+	if _, err := st.UpdateSettings(context.Background(), store.SettingsUpdate{DeliveryMode: &perPost}); err != nil {
+		t.Fatalf("patch per_post: %v", err)
+	}
+	cur, _ = st.GetSettings(context.Background())
+	if cur.DeliveryMode != store.DeliveryPerPost {
+		t.Errorf("after patch: delivery_mode = %q, want per_post", cur.DeliveryMode)
+	}
+
+	// Invalid value is rejected.
+	invalid := store.DeliveryMode("rocket")
+	_, err = st.UpdateSettings(context.Background(), store.SettingsUpdate{DeliveryMode: &invalid})
+	if err != store.ErrInvalidDeliveryMode {
+		t.Errorf("invalid value: got err = %v, want ErrInvalidDeliveryMode", err)
 	}
 }

@@ -186,6 +186,10 @@ func (a PostStore) MarkFiltered(ctx context.Context, id string) error {
 	return a.S.MarkPostFiltered(ctx, id)
 }
 
+func (a PostStore) MarkDead(ctx context.Context, id string) error {
+	return a.S.MarkPostDead(ctx, id)
+}
+
 // Compile-time assertions that the adapters satisfy the interfaces.
 var (
 	_ store.ChannelRepo  = ChannelStore{}

@@ -28,6 +28,7 @@ export interface Settings {
 	ai_api_key_ref: string;
 	ai_reachable: boolean | null;
 	uncategorized_label: string;
+	delivery_mode: 'bundled' | 'per_post';
 	updated_at: string;
 }
 
@@ -169,6 +170,7 @@ export const api = {
 		digest_interval_seconds?: number;
 		telegram_subscriber_chat?: number;
 		uncategorized_label?: string;
+		delivery_mode?: 'bundled' | 'per_post';
 	}): Promise<{ settings: Settings }> => request('PATCH', '/api/settings', patch),
 
 	testTelegram: (): Promise<{
@@ -209,5 +211,54 @@ export const api = {
 		if (params?.limit !== undefined) q.set('limit', String(params.limit));
 		const qs = q.toString();
 		return request('GET', `/api/events${qs ? '?' + qs : ''}`);
-	}
+	},
+
+	// Posts (per-post delivery queue)
+	listPosts: (params?: {
+		status?:
+			| 'received'
+			| 'summarized'
+			| 'included_in_digest'
+			| 'sent'
+			| 'send_failed'
+			| 'filtered_out'
+			| 'dead';
+		limit?: number;
+	}): Promise<{ posts: Post[]; count: number }> => {
+		const q = new URLSearchParams();
+		if (params?.status !== undefined) q.set('status', params.status);
+		if (params?.limit !== undefined) q.set('limit', String(params.limit));
+		const qs = q.toString();
+		return request('GET', `/api/posts${qs ? '?' + qs : ''}`);
+	},
+
+	getPost: (id: string): Promise<{ post: Post }> => request('GET', `/api/posts/${id}`)
 };
+
+export interface Post {
+	id: string;
+	channel_id: string;
+	channel_handle?: string;
+	source_msg_id: number;
+	link: string;
+	raw_text: string;
+	media_kind: string;
+	captured_at: string;
+	status:
+		| 'received'
+		| 'summarized'
+		| 'included_in_digest'
+		| 'sent'
+		| 'send_failed'
+		| 'filtered_out'
+		| 'dead';
+	category_id?: string;
+	category_name?: string;
+	summary: string;
+	confidence?: number;
+	attempts: number;
+	last_attempt_at?: string;
+	sent_at?: string;
+	telegram_msg_id?: number;
+	send_error?: string;
+}

@@ -201,6 +201,18 @@ func (c *Cycle) Run(ctx context.Context, windowStart, windowEnd time.Time) (stri
 	}
 	log.Info("cycle.summarized", "items", len(received), "degraded", degraded)
 
+	// 2b. Branch on delivery mode. The fetch + summarize steps above
+	// are shared; the send step is the only thing that changes.
+	// Per-post mode runs the per-post send loop in per_post_cycle.go
+	// and finishes the cycle there.
+	if settings.DeliveryMode == store.DeliveryPerPost {
+		_, _, perr := c.runPerPost(ctx, cycleID, fetched, channels, settings, categories)
+		if perr != nil && perr != context.Canceled {
+			return cycleID, perr
+		}
+		return cycleID, nil
+	}
+
 	// 3. Bundle: list all unsent posts (summarized + previously
 	// send_failed). The cutoff is "now" so any post whose last
 	// attempt was before the current call to ListUnsent is eligible

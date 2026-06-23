@@ -63,9 +63,11 @@ func (s *Store) seedDefaults(ctx context.Context) error {
 
 	_, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO settings (
 		id, digest_interval_seconds, telegram_bot_token_ref, telegram_subscriber_chat,
-		ai_provider, ai_model, ai_api_key_ref, ai_base_url, uncategorized_label, updated_at
+		ai_provider, ai_model, ai_api_key_ref, ai_base_url, uncategorized_label,
+		delivery_mode, updated_at
 	) VALUES ('singleton', 600, 'env:TELEGRAM_BOT_TOKEN', 0,
-		'fake', 'gpt-4o-mini', 'env:AI_API_KEY', 'https://api.openai.com/v1', 'Uncategorized', ?)`,
+		'fake', 'gpt-4o-mini', 'env:AI_API_KEY', 'https://api.openai.com/v1', 'Uncategorized',
+		'per_post', ?)`,
 		time.Now().UTC().Format(time.RFC3339))
 	if err != nil {
 		return err

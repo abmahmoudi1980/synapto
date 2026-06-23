@@ -52,8 +52,12 @@ func (s *Sender) SendBatch(ctx context.Context, chatID int64, messages []string,
 	return firstResult, nil
 }
 
-// stripMarkdownV2Escapes removes the backslash-escape sequences produced
-// by the renderer so a plain-text retry shows clean text.
+// StripMarkdownV2 removes the backslash-escape sequences produced by
+// the renderer so a plain-text retry shows clean text. Exported for
+// the per-post cycle path, which sends individual messages and falls
+// back to plain text on parse errors.
+func StripMarkdownV2(s string) string { return stripMarkdownV2Escapes(s) }
+
 func stripMarkdownV2Escapes(s string) string {
 	s = strings.ReplaceAll(s, `\_`, "_")
 	s = strings.ReplaceAll(s, `\*`, "*")

@@ -1,10 +1,12 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { api, type CycleListEntry } from '$lib/api';
+	import { api, type CycleListEntry, type Post, type Settings } from '$lib/api';
 	import StatusBadge from '$lib/components/StatusBadge.svelte';
 	import Icon from '$lib/components/Icon.svelte';
 
+	let settings: Settings | null = null;
 	let cycles: CycleListEntry[] = [];
+	let posts: Post[] = [];
 	let total = 0;
 	let loading = false;
 	let error = '';
@@ -15,27 +17,33 @@
 	let limit = 50;
 	let offset = 0;
 
-	onMount(load);
-
-	async function load() {
+	onMount(async () => {
 		loading = true;
 		error = '';
 		try {
-			const res = await api.listCycles({ limit, offset });
-			cycles = res.cycles;
-			total = res.total;
+			const s = await api.getSettings();
+			settings = s.settings;
+			if (settings.delivery_mode === 'per_post') {
+				const p = await api.listPosts({ status: 'sent', limit: 100 });
+				posts = p.posts;
+			} else {
+				const c = await api.listCycles({ limit, offset });
+				cycles = c.cycles;
+				total = c.total;
+			}
 		} catch (e) {
 			error = (e as Error).message;
 		} finally {
 			loading = false;
 		}
-	}
+	});
 
 	function setFilter(f: StatusFilter) {
 		statusFilter = f;
 		offset = 0;
 	}
 
+	$: isPerPost = settings?.delivery_mode === 'per_post';
 	$: visible = statusFilter === 'all' ? cycles : cycles.filter((c) => c.status === statusFilter);
 	$: counts = {
 		all: total,
@@ -60,7 +68,26 @@
 		}
 	}
 
-	function formatDate(iso: string): string {
+	function postStatusKind(s: Post['status']): 'ok' | 'degraded' | 'failed' | 'skipped' | 'neutral' {
+		switch (s) {
+			case 'sent':
+				return 'ok';
+			case 'send_failed':
+				return 'failed';
+			case 'summarized':
+			case 'included_in_digest':
+			case 'received':
+				return 'neutral';
+			case 'filtered_out':
+			case 'dead':
+				return 'skipped';
+			default:
+				return 'neutral';
+		}
+	}
+
+	function formatDate(iso: string | undefined | null): string {
+		if (!iso) return '—';
 		try {
 			return new Date(iso).toLocaleString();
 		} catch {
@@ -72,8 +99,26 @@
 		const next = Math.max(0, offset + delta * limit);
 		if (next !== offset) {
 			offset = next;
-			load();
+			loadCycles();
 		}
+	}
+
+	async function loadCycles() {
+		loading = true;
+		try {
+			const c = await api.listCycles({ limit, offset });
+			cycles = c.cycles;
+			total = c.total;
+		} catch (e) {
+			error = (e as Error).message;
+		} finally {
+			loading = false;
+		}
+	}
+
+	function truncateSummary(s: string, n = 120): string {
+		if (s.length <= n) return s;
+		return s.slice(0, n - 1) + '…';
 	}
 </script>
 
@@ -86,13 +131,19 @@
 		<p class="eyebrow">Audit</p>
 		<h1>History</h1>
 		<p class="lede">
-			Every scheduled cycle, what it produced, and what the operator should know. Cycles are
-			stored forever; the most recent {limit} are shown.
+			{#if isPerPost}
+				Each row is one Telegram message that was sent to the subscriber chat. The
+				queue is a per-post delivery record; failures are isolated per post and retried
+				on the next cycle.
+			{:else}
+				Every scheduled cycle, what it produced, and what the operator should know.
+				Cycles are stored forever; the most recent {limit} are shown.
+			{/if}
 		</p>
 	</div>
 	<div class="head-stat">
-		<span class="stat-num">{total}</span>
-		<span class="stat-label">total cycles</span>
+		<span class="stat-num">{isPerPost ? posts.length : total}</span>
+		<span class="stat-label">{isPerPost ? 'sent posts' : 'total cycles'}</span>
 	</div>
 </header>
 
@@ -106,101 +157,151 @@
 	</div>
 {/if}
 
-<div class="filter-bar" role="tablist" aria-label="Filter cycles by status">
-	{#each filters as f (f)}
-		<button
-			type="button"
-			role="tab"
-			aria-selected={statusFilter === f}
-			class="filter-chip"
-			class:active={statusFilter === f}
-			on:click={() => setFilter(f)}
-		>
-			{f.replace('_', ' ')}
-			<span class="count">{counts[f]}</span>
-		</button>
-	{/each}
-</div>
-
-{#if loading && cycles.length === 0}
-	<div class="loading surface">
-		<Icon name="spinner" size={18} />
-		<span>Loading cycles…</span>
-	</div>
-{:else if visible.length === 0}
-	<div class="empty surface">
-		<Icon name="history" size={32} />
-		<p>
-			{#if total === 0}
-				No cycles yet. The first one will appear here after the next interval.
-			{:else}
-				No cycles in this status.
-			{/if}
-		</p>
-	</div>
-{:else}
-	<div class="table-wrap surface">
-		<table class="data-table" aria-label="Cycles">
-			<thead>
-				<tr>
-					<th scope="col">Window</th>
-					<th scope="col">Status</th>
-					<th scope="col" class="num-col">Items</th>
-					<th scope="col" class="num-col">Inputs</th>
-					<th scope="col">Finished</th>
-					<th scope="col" class="actions-col"><span class="sr-only">View</span></th>
-				</tr>
-			</thead>
-			<tbody>
-				{#each visible as c (c.id)}
-					{@const skipped = c.status === 'skipped_no_items'}
+{#if isPerPost}
+	{#if loading && posts.length === 0}
+		<div class="loading surface">
+			<Icon name="spinner" size={18} />
+			<span>Loading sent posts…</span>
+		</div>
+	{:else if posts.length === 0}
+		<div class="empty surface">
+			<Icon name="history" size={32} />
+			<p>No sent posts yet. The first one will appear here after the next cycle.</p>
+		</div>
+	{:else}
+		<div class="table-wrap surface">
+			<table class="data-table" aria-label="Sent posts">
+				<thead>
 					<tr>
-						<td class="time">
-							<strong>{formatDate(c.window_end)}</strong>
-							<small class="muted">{formatDate(c.window_start)}</small>
-						</td>
-						<td>
-							<StatusBadge
-								kind={statusKind(c.status)}
-								label={c.status.replace('_', ' ')}
-							/>
-						</td>
-						<td class="num-col mono">{c.output_items}</td>
-						<td class="num-col mono">{c.input_msg_count}</td>
-						<td class="mono">{c.finished_at ? formatDate(c.finished_at) : '—'}</td>
-						<td class="actions">
-							{#if skipped}
-								<span class="muted small">no items</span>
-							{:else}
-								<a class="btn-link" href="/history/{c.id}">
-									View
-									<Icon name="arrow-right" size={14} />
-								</a>
-							{/if}
-						</td>
+						<th scope="col">Sent at</th>
+						<th scope="col">Channel</th>
+						<th scope="col">Category</th>
+						<th scope="col">Summary</th>
+						<th scope="col" class="num-col">Attempts</th>
 					</tr>
-				{/each}
-			</tbody>
-		</table>
+				</thead>
+				<tbody>
+					{#each posts as p (p.id)}
+						<tr>
+							<td class="mono">{formatDate(p.sent_at)}</td>
+							<td>
+								{#if p.channel_handle}
+									<strong>@{p.channel_handle}</strong>
+								{:else}
+									—
+								{/if}
+							</td>
+							<td>
+								<StatusBadge
+									kind={postStatusKind(p.status)}
+									label={p.category_name || 'Uncategorized'}
+								/>
+							</td>
+							<td>{truncateSummary(p.summary)}</td>
+							<td class="num-col mono">{p.attempts}</td>
+						</tr>
+					{/each}
+				</tbody>
+			</table>
+		</div>
+	{/if}
+{:else}
+	<div class="filter-bar" role="tablist" aria-label="Filter cycles by status">
+		{#each filters as f (f)}
+			<button
+				type="button"
+				role="tab"
+				aria-selected={statusFilter === f}
+				class="filter-chip"
+				class:active={statusFilter === f}
+				on:click={() => setFilter(f)}
+			>
+				{f.replace('_', ' ')}
+				<span class="count">{counts[f]}</span>
+			</button>
+		{/each}
 	</div>
 
-	<nav class="pagination" aria-label="Pagination">
-		<button class="btn-ghost" disabled={offset === 0} on:click={() => pageOffset(-1)}>
-			<Icon name="arrow-left" size={14} />
-			Newer
-		</button>
-		<span class="page-meta">
-			Showing {offset + 1}–{offset + visible.length} of {total}
-		</span>
-		<button
-			class="btn-ghost"
-			disabled={offset + visible.length >= total}
-			on:click={() => pageOffset(1)}
-		>
-			Older
-			<Icon name="arrow-right" size={14} />
-		</button>
-	</nav>
+	{#if loading && cycles.length === 0}
+		<div class="loading surface">
+			<Icon name="spinner" size={18} />
+			<span>Loading cycles…</span>
+		</div>
+	{:else if visible.length === 0}
+		<div class="empty surface">
+			<Icon name="history" size={32} />
+			<p>
+				{#if total === 0}
+					No cycles yet. The first one will appear here after the next interval.
+				{:else}
+					No cycles in this status.
+				{/if}
+			</p>
+		</div>
+	{:else}
+		<div class="table-wrap surface">
+			<table class="data-table" aria-label="Cycles">
+				<thead>
+					<tr>
+						<th scope="col">Window</th>
+						<th scope="col">Status</th>
+						<th scope="col" class="num-col">Items</th>
+						<th scope="col" class="num-col">Inputs</th>
+						<th scope="col">Finished</th>
+						<th scope="col" class="actions-col"><span class="sr-only">View</span></th>
+					</tr>
+				</thead>
+				<tbody>
+					{#each visible as c (c.id)}
+						{@const skipped = c.status === 'skipped_no_items'}
+						<tr>
+							<td class="time">
+								<strong>{formatDate(c.window_end)}</strong>
+								<small class="muted">{formatDate(c.window_start)}</small>
+							</td>
+							<td>
+								<StatusBadge
+									kind={statusKind(c.status)}
+									label={c.status.replace('_', ' ')}
+								/>
+							</td>
+							<td class="num-col mono">{c.output_items}</td>
+							<td class="num-col mono">{c.input_msg_count}</td>
+							<td class="mono">{c.finished_at ? formatDate(c.finished_at) : '—'}</td>
+							<td class="actions">
+								{#if skipped}
+									<span class="muted small">no items</span>
+								{:else}
+									<a class="btn-link" href="/history/{c.id}">
+										View
+										<Icon name="arrow-right" size={14} />
+									</a>
+								{/if}
+							</td>
+						</tr>
+					{/each}
+				</tbody>
+			</table>
+		</div>
+
+		<nav class="pagination" aria-label="Pagination">
+			<button class="btn-ghost" disabled={offset === 0} on:click={() => pageOffset(-1)}>
+				<Icon name="arrow-left" size={14} />
+				Newer
+			</button>
+			<span class="page-meta">
+				Showing {offset + 1}–{offset + visible.length} of {total}
+			</span>
+			<button
+				class="btn-ghost"
+				disabled={offset + visible.length >= total}
+				on:click={() => pageOffset(1)}
+			>
+				Older
+				<Icon name="arrow-right" size={14} />
+			</button>
+		</nav>
+	{/if}
 {/if}
 
 <style>
@@ -226,6 +327,34 @@
 		max-width: 60ch;
 		font-size: var(--text-sm);
 	}
+	.updated {
+		margin: 0;
+		font-size: var(--text-xs);
+		color: var(--color-text-subtle);
+		font-family: var(--font-mono);
+	}
+
+	.alert {
+		display: flex;
+		gap: 0.75rem;
+		padding: var(--space-3) var(--space-4);
+		border-radius: var(--radius-md);
+		border: 1px solid;
+		margin-bottom: var(--space-3);
+	}
+	.alert.danger {
+		background: var(--color-danger-soft);
+		border-color: var(--color-danger);
+		color: var(--color-danger);
+	}
+	.alert strong {
+		display: block;
+		font-weight: 600;
+	}
+	.alert span {
+		font-size: var(--text-sm);
+		color: var(--color-text);
+	}
 
 	.head-stat {
 		display: flex;
@@ -250,28 +379,6 @@
 		letter-spacing: 0.06em;
 		text-transform: uppercase;
 		color: var(--color-text-subtle);
-	}
-
-	.alert {
-		display: flex;
-		gap: 0.75rem;
-		padding: var(--space-3) var(--space-4);
-		border-radius: var(--radius-md);
-		border: 1px solid;
-		margin-bottom: var(--space-3);
-	}
-	.alert.danger {
-		background: var(--color-danger-soft);
-		border-color: var(--color-danger);
-		color: var(--color-danger);
-	}
-	.alert strong {
-		display: block;
-		font-weight: 600;
-	}
-	.alert span {
-		font-size: var(--text-sm);
-		color: var(--color-text);
 	}
 
 	.filter-bar {

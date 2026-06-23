@@ -325,6 +325,20 @@ func (s *Store) MarkPostFiltered(ctx context.Context, id string) error {
 	return err
 }
 
+// MarkPostDead sets status='dead'. Called by the per-post cycle
+// when a post has exceeded maxSendAttempts consecutive failures
+// (see per_post_cycle.go). The post is excluded from ListUnsent
+// automatically. The transition is one-way: a 'dead' post is
+// never re-summarized or re-sent by the cycle.
+func (s *Store) MarkPostDead(ctx context.Context, id string) error {
+	now := nowISO()
+	_, err := s.db.ExecContext(ctx, `UPDATE posts SET
+		status = 'dead', updated_at = ?
+		WHERE id = ? AND status IN ('received', 'summarized',
+		    'included_in_digest', 'send_failed')`, now, id)
+	return err
+}
+
 // repeatQ returns "?," repeated n times (used to build IN (?, ?, ...)
 // placeholders).
 func repeatQ(n int) string {

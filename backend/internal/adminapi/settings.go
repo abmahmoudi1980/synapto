@@ -25,6 +25,7 @@ type settingsJSON struct {
 	AIAPIKeyRef            string `json:"ai_api_key_ref"`
 	AIReachable            *bool  `json:"ai_reachable"`
 	UncategorizedLabel     string `json:"uncategorized_label"`
+	DeliveryMode           string `json:"delivery_mode"`
 	UpdatedAt              string `json:"updated_at"`
 }
 
@@ -38,6 +39,7 @@ func settingsToJSON(s *Server, st store.Settings) settingsJSON {
 		AIBaseURL:              st.AIBaseURL,
 		AIAPIKeyRef:            st.AIAPIKeyRef,
 		UncategorizedLabel:     st.UncategorizedLabel,
+		DeliveryMode:           string(st.DeliveryMode),
 		UpdatedAt:              st.UpdatedAt.UTC().Format(time.RFC3339),
 	}
 	if st.TelegramBotTokenRef == "" {
@@ -73,6 +75,7 @@ func (s *Server) handlePatchSettings(w http.ResponseWriter, r *http.Request) {
 		DigestIntervalSeconds  *int    `json:"digest_interval_seconds"`
 		TelegramSubscriberChat *int64  `json:"telegram_subscriber_chat"`
 		UncategorizedLabel     *string `json:"uncategorized_label"`
+		DeliveryMode           *string `json:"delivery_mode"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_body", err.Error(), "")
@@ -111,11 +114,23 @@ func (s *Server) handlePatchSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if req.DeliveryMode != nil {
+		v := *req.DeliveryMode
+		if v != string(store.DeliveryBundled) && v != string(store.DeliveryPerPost) {
+			writeError(w, http.StatusBadRequest, "invalid_delivery_mode",
+				"delivery_mode must be 'bundled' or 'per_post'", "delivery_mode")
+			return
+		}
+	}
 
 	u := store.SettingsUpdate{
 		DigestIntervalSeconds:  req.DigestIntervalSeconds,
 		TelegramSubscriberChat: req.TelegramSubscriberChat,
 		UncategorizedLabel:     req.UncategorizedLabel,
+	}
+	if req.DeliveryMode != nil {
+		dm := store.DeliveryMode(*req.DeliveryMode)
+		u.DeliveryMode = &dm
 	}
 
 	cur, err := s.deps.Settings.Update(r.Context(), u)
@@ -124,6 +139,9 @@ func (s *Server) handlePatchSettings(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, store.ErrInvalidInterval):
 			writeError(w, http.StatusBadRequest, "invalid_interval",
 				"digest_interval_seconds must be between 60 and 86400", "digest_interval_seconds")
+		case errors.Is(err, store.ErrInvalidDeliveryMode):
+			writeError(w, http.StatusBadRequest, "invalid_delivery_mode",
+				"delivery_mode must be 'bundled' or 'per_post'", "delivery_mode")
 		default:
 			if strings.Contains(err.Error(), "must not be empty") {
 				writeError(w, http.StatusBadRequest, "invalid_name", err.Error(), "uncategorized_label")

@@ -18,6 +18,7 @@ type settingsRow struct {
 	AIAPIKeyRef            string `db:"ai_api_key_ref"`
 	AIBaseURL              string `db:"ai_base_url"`
 	UncategorizedLabel     string `db:"uncategorized_label"`
+	DeliveryMode           string `db:"delivery_mode"`
 	UpdatedAt              string `db:"updated_at"`
 }
 
@@ -31,6 +32,7 @@ func (r settingsRow) toEntity() store.Settings {
 		AIAPIKeyRef:            r.AIAPIKeyRef,
 		AIBaseURL:              r.AIBaseURL,
 		UncategorizedLabel:     r.UncategorizedLabel,
+		DeliveryMode:           store.DeliveryMode(r.DeliveryMode),
 		UpdatedAt:              parseTimeStr(r.UpdatedAt),
 	}
 }
@@ -67,10 +69,19 @@ func (s *Store) UpdateSettings(ctx context.Context, u store.SettingsUpdate) (sto
 		}
 		cur.UncategorizedLabel = v
 	}
+	if u.DeliveryMode != nil {
+		v := *u.DeliveryMode
+		if v != store.DeliveryBundled && v != store.DeliveryPerPost {
+			return store.Settings{}, store.ErrInvalidDeliveryMode
+		}
+		cur.DeliveryMode = v
+	}
 	_, err = s.db.ExecContext(ctx, `UPDATE settings SET
-		digest_interval_seconds = ?, telegram_subscriber_chat = ?, uncategorized_label = ?, updated_at = ?
+		digest_interval_seconds = ?, telegram_subscriber_chat = ?, uncategorized_label = ?,
+		delivery_mode = ?, updated_at = ?
 		WHERE id = 'singleton'`,
-		cur.DigestIntervalSeconds, cur.TelegramSubscriberChat, cur.UncategorizedLabel, nowISO())
+		cur.DigestIntervalSeconds, cur.TelegramSubscriberChat, cur.UncategorizedLabel,
+		string(cur.DeliveryMode), nowISO())
 	if err != nil {
 		return store.Settings{}, err
 	}

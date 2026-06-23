@@ -16,6 +16,7 @@
 	let intervalSeconds = 0;
 	let chatId = 0;
 	let uncategorizedLabel = 'Uncategorized';
+	let deliveryMode: 'bundled' | 'per_post' = 'per_post';
 
 	$: intervalTotal = intervalMinutes * 60 + intervalSeconds;
 	$: intervalValid = intervalTotal >= 60 && intervalTotal <= 86400;
@@ -26,7 +27,8 @@
 		settings !== null &&
 		(intervalTotal !== settings.digest_interval_seconds ||
 			chatId !== settings.telegram_subscriber_chat ||
-			uncategorizedLabel !== settings.uncategorized_label);
+			uncategorizedLabel !== settings.uncategorized_label ||
+			deliveryMode !== settings.delivery_mode);
 
 	onMount(load);
 
@@ -49,6 +51,7 @@
 		intervalSeconds = s.digest_interval_seconds % 60;
 		chatId = s.telegram_subscriber_chat;
 		uncategorizedLabel = s.uncategorized_label;
+		deliveryMode = s.delivery_mode;
 	}
 
 	function resetForm() {
@@ -64,7 +67,8 @@
 			const res = await api.patchSettings({
 				digest_interval_seconds: intervalTotal,
 				telegram_subscriber_chat: chatId,
-				uncategorized_label: uncategorizedLabel.trim()
+				uncategorized_label: uncategorizedLabel.trim(),
+				delivery_mode: deliveryMode
 			});
 			settings = res.settings;
 			applyToForm(res.settings);
@@ -242,6 +246,18 @@
 				<p class="hint">
 					Heading used for digest items the AI can't classify into a known category. Max
 					40 characters.
+				</p>
+			</div>
+
+			<div class="field">
+				<label for="delivery-mode">Delivery mode</label>
+				<select id="delivery-mode" bind:value={deliveryMode}>
+					<option value="per_post">Per-post (one Telegram message per post)</option>
+					<option value="bundled">Bundled (one digest message per cycle)</option>
+				</select>
+				<p class="hint">
+					Per-post mode sends each post as its own message and isolates send failures
+					per post. Bundled mode groups posts by category into a single digest.
 				</p>
 			</div>
 		</section>

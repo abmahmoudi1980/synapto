@@ -96,6 +96,7 @@ func TestCycle_EndToEnd_OneChannelThreeMessages(t *testing.T) {
 	// We set a non-zero subscriber chat so the send path is exercised.
 	_, err = st.UpdateSettings(ctx, store.SettingsUpdate{
 		TelegramSubscriberChat: int64Ptr(123456789),
+		DeliveryMode:           deliveryModePtr(store.DeliveryBundled),
 	})
 	if err != nil {
 		t.Fatalf("update settings: %v", err)
@@ -260,6 +261,15 @@ func TestCycle_NoSubscriberChat_MarksSendFailed(t *testing.T) {
 
 	// Deliberately do NOT set telegram_subscriber_chat in settings.
 	// SubscriberChatID env fallback is 0.
+	// Pin the cycle to the bundled path so the test can assert on the
+	// digest row; in per-post mode the no-recipient case is recorded
+	// on the per-post status + op_event (covered by
+	// TestRunPerPost_NoRecipientMarksAllFailed).
+	if _, err := st.UpdateSettings(ctx, store.SettingsUpdate{
+		DeliveryMode: deliveryModePtr(store.DeliveryBundled),
+	}); err != nil {
+		t.Fatalf("update settings: %v", err)
+	}
 
 	cycle := digest.NewCycle(digest.CycleDeps{
 		Log:              logging.New("debug"),
@@ -393,6 +403,10 @@ func TestCycle_RestartSafety_NoDoubleDelivery(t *testing.T) {
 // int64Ptr is a helper for settings updates.
 func int64Ptr(v int64) *int64 { return &v }
 
+// deliveryModePtr is a helper for settings updates; the bundled-mode
+// regression tests use it to pin the cycle to the bundled path.
+func deliveryModePtr(v store.DeliveryMode) *store.DeliveryMode { return &v }
+
 // intPtr is a helper for settings updates.
 func intPtr(v int) *int { return &v }
 
@@ -416,6 +430,7 @@ func TestCycle_RenamedCategoryAppearsInDigest(t *testing.T) {
 	}
 	if _, err := st.UpdateSettings(ctx, store.SettingsUpdate{
 		TelegramSubscriberChat: int64Ptr(123456789),
+		DeliveryMode:           deliveryModePtr(store.DeliveryBundled),
 	}); err != nil {
 		t.Fatalf("update settings: %v", err)
 	}

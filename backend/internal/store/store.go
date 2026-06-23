@@ -22,6 +22,9 @@ var (
 	ErrCannotRemoveDefault = errors.New("store: cannot remove a default category")
 	// ErrInvalidInterval is returned when the digest interval is out of range.
 	ErrInvalidInterval = errors.New("store: invalid digest interval (must be 60..86400 seconds)")
+	// ErrInvalidDeliveryMode is returned when SettingsUpdate.DeliveryMode
+	// is set to a value other than "bundled" or "per_post".
+	ErrInvalidDeliveryMode = errors.New("store: invalid delivery mode (must be 'bundled' or 'per_post')")
 )
 
 // ChannelStatus is the lifecycle state of a source channel.
@@ -56,6 +59,22 @@ type Category struct {
 	UpdatedAt time.Time
 }
 
+// DeliveryMode is how the cycle packages a window of posts for delivery
+// to the subscriber chat. See specs/001-telegram-news-assistant/data-model.md
+// (v2 amendment) and contracts/telegram-render.md.
+type DeliveryMode string
+
+const (
+	// DeliveryBundled: all unsent posts in the window are grouped into
+	// a single MarkdownV2 digest message (or a bounded set when the
+	// rendered text would exceed Telegram's per-message cap). Original
+	// v1 behavior. Retained for the operator to compare against.
+	DeliveryBundled DeliveryMode = "bundled"
+	// DeliveryPerPost: each post is sent as its own Telegram message.
+	// Failures are isolated per post. Default for v2.
+	DeliveryPerPost DeliveryMode = "per_post"
+)
+
 // Settings is the operator-configured runtime configuration row.
 // Credential fields hold references (e.g. "env:TELEGRAM_BOT_TOKEN"), never
 // raw secrets.
@@ -68,6 +87,7 @@ type Settings struct {
 	AIAPIKeyRef            string
 	AIBaseURL              string
 	UncategorizedLabel     string
+	DeliveryMode           DeliveryMode
 	UpdatedAt              time.Time
 }
 
@@ -247,6 +267,7 @@ type SettingsUpdate struct {
 	DigestIntervalSeconds  *int
 	TelegramSubscriberChat *int64
 	UncategorizedLabel     *string
+	DeliveryMode           *DeliveryMode
 }
 
 // SettingsRepo persists the singleton operator-configuration row.
@@ -354,4 +375,10 @@ type PostRepo interface {
 
 	// MarkFiltered sets status='filtered_out' (ErrInvalidInput).
 	MarkFiltered(ctx context.Context, id string) error
+
+	// MarkDead sets status='dead'. Called by the per-post cycle
+	// after a post has exceeded maxSendAttempts consecutive send
+	// failures. The post is excluded from ListUnsent and will not
+	// be retried by future cycles.
+	MarkDead(ctx context.Context, id string) error
 }
